@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1
+
+FROM oven/bun:1-alpine AS web
+WORKDIR /web
+COPY web/package.json web/bun.lock ./
+RUN bun install --frozen-lockfile
+COPY web/ ./
+RUN bun run build
+
+FROM golang:1.27-alpine AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath \
+    -ldflags="-s -w -X github.com/kurwall/kurwall/internal/platform/version.Version=${VERSION} -X github.com/kurwall/kurwall/internal/platform/version.Commit=${COMMIT} -X github.com/kurwall/kurwall/internal/platform/version.BuildDate=${BUILD_DATE}" \
+    -o /out/coordinator \
+    ./cmd/coordinator
+
+FROM alpine:3.23
+
+RUN apk add --no-cache ca-certificates tzdata curl \
+    && addgroup -S kurwall \
+    && adduser -S -G kurwall kurwall
+
+WORKDIR /app
+COPY --from=builder /out/coordinator /app/coordinator
+RUN ln -s /app/coordinator /usr/local/bin/kurwall \
+    && mkdir -p /var/lib/kurwall \
+    && chown kurwall:kurwall /var/lib/kurwall
+COPY --from=web /web/dist /app/web
+
+USER kurwall
+EXPOSE 8080 9090
+
+HEALTHCHECK --interval=15s --timeout=3s --retries=5 --start-period=20s \
+    CMD curl -fsS http://127.0.0.1:8080/ping || exit 1
+
+ENTRYPOINT ["/app/coordinator"]

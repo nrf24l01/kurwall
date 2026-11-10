@@ -1,0 +1,10 @@
+.git
+.github
+build
+web/node_modules
+web/dist
+web/.vite
+deploy/tls
+deploy/.env
+*.db
+*.log

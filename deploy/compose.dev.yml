@@ -1,0 +1,102 @@
+name: kurwall
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kurwall}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+      POSTGRES_DB: ${POSTGRES_DB:-kurwall}
+    volumes:
+      - kurwall-postgres:/var/lib/postgresql
+    networks:
+      - kurwall-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.9-alpine
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-kurwall}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-kurwall}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD in deploy/.env}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - kurwall-clickhouse:/var/lib/clickhouse
+    networks:
+      - kurwall-net
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "clickhouse-client --user \"$${CLICKHOUSE_USER}\" --password \"$${CLICKHOUSE_PASSWORD}\" --query 'SELECT 1' >/dev/null || exit 1",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
+  coordinator:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.coordinator
+      args:
+        VERSION: ${KURWALL_VERSION:-dev}
+        COMMIT: ${KURWALL_COMMIT:-unknown}
+        BUILD_DATE: ${KURWALL_BUILD_DATE:-unknown}
+    image: kurwall/coordinator:dev
+    restart: unless-stopped
+    environment:
+      APP_CONFIG_PATH: /etc/kurwall/coordinator.yaml
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-kurwall}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-kurwall}
+      CLICKHOUSE_ADDR: clickhouse:9000
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-kurwall}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      KURWALL_API_TOKEN: ${KURWALL_API_TOKEN:-}
+      KURWALL_PUBLIC_URL: ${KURWALL_PUBLIC_URL:-http://localhost:8080}
+      KURWALL_GRPC_PUBLIC_ADDR: ${KURWALL_GRPC_PUBLIC_ADDR:-}
+      KURWALL_AGENT_DIST_DIR: /app/agent-dist
+      KURWALL_ENROLLMENT_DIR: /var/lib/kurwall/enrollment
+    volumes:
+      - ./coordinator.yaml:/etc/kurwall/coordinator.yaml:ro
+      - ./tls:/etc/kurwall/tls:ro
+      - ../build/agent-dist:/app/agent-dist:ro
+      - kurwall-enrollment:/var/lib/kurwall
+    ports:
+      - "${KURWALL_BIND_ADDR:-127.0.0.1}:8080:8080"
+      - "${KURWALL_BIND_ADDR:-127.0.0.1}:9090:9090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    networks:
+      - kurwall-net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+networks:
+  kurwall-net:
+    driver: bridge
+
+volumes:
+  kurwall-postgres:
+  kurwall-clickhouse:
+  kurwall-enrollment:

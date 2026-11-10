@@ -1,0 +1,27 @@
+# Build output
+/build/
+/agent
+/coordinator
+*.test
+*.out
+
+# Frontend
+web/node_modules/
+web/dist/
+web/.vite/
+
+# Local state and secrets
+*.db
+*.db-shm
+*.db-wal
+deploy/.env
+deploy/tls/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Logs
+*.log

@@ -1,0 +1,188 @@
+syntax = "proto3";
+
+package kurwall.v1;
+
+option go_package = "github.com/kurwall/kurwall/gen/kurwall/v1;kurwallv1";
+
+// CoordinatorService is the single persistent channel between an agent and
+// the coordinator. Agents stream events and heartbeats; the coordinator
+// streams policy snapshots and event acknowledgements.
+service CoordinatorService {
+  rpc Connect(stream AgentRequest) returns (stream CoordinatorResponse);
+}
+
+message AgentRequest {
+  oneof payload {
+    AgentHello hello = 1;
+    EventBatch events = 2;
+    PolicyAck policy_ack = 3;
+    AgentHeartbeat heartbeat = 4;
+  }
+}
+
+message AgentHello {
+  string node_id = 1;
+  string hostname = 2;
+  string agent_version = 3;
+  string os = 4;
+  string kernel = 5;
+  int64 local_policy_version = 6;
+  repeated string addresses = 7;
+}
+
+message AgentHeartbeat {
+  int64 sent_at_unix_nano = 1;
+  uint64 buffered_events = 2;
+  uint64 dropped_events = 3;
+  int64 applied_policy_version = 4;
+}
+
+message EventBatch {
+  string batch_id = 1;
+  repeated NetworkEvent events = 2;
+  int64 created_at_unix_nano = 3;
+}
+
+message NetworkEvent {
+  string event_id = 1;
+  oneof event {
+    FlowEvent flow = 2;
+    DnsEvent dns = 3;
+    BlockEvent block = 4;
+  }
+}
+
+// FlowEvent is one consolidated record emitted when a connection is
+// completed (conntrack DESTROY) or when the agent flushes active flows.
+message FlowEvent {
+  int64 started_at_unix_nano = 1;
+  int64 ended_at_unix_nano = 2;
+  string src_ip = 3;
+  string dst_ip = 4;
+  uint32 src_port = 5;
+  uint32 dst_port = 6;
+  uint32 protocol = 7;
+  string domain = 8;
+  string sni = 9;
+  string container_id = 10;
+  string container_name = 11;
+  uint64 bytes_in = 12;
+  uint64 bytes_out = 13;
+  uint64 packets_in = 14;
+  uint64 packets_out = 15;
+  bool blocked = 16;
+  string rule_id = 17;
+  string reason = 18;
+  string network = 19;
+}
+
+message DnsEvent {
+  int64 at_unix_nano = 1;
+  string client_ip = 2;
+  string client_port = 3;
+  string qname = 4;
+  uint32 qtype = 5;
+  uint32 rcode = 6;
+  repeated string answers = 7;
+  bool blocked = 8;
+  string rule_id = 9;
+  string container_id = 10;
+  string container_name = 11;
+  uint32 latency_ms = 12;
+}
+
+message BlockEvent {
+  int64 at_unix_nano = 1;
+  string kind = 2; // ip, cidr, domain, dns
+  string target = 3;
+  string src_ip = 4;
+  string dst_ip = 5;
+  uint32 src_port = 6;
+  uint32 dst_port = 7;
+  uint32 protocol = 8;
+  string domain = 9;
+  string container_id = 10;
+  string container_name = 11;
+  string rule_id = 12;
+  string reason = 13;
+}
+
+message PolicyAck {
+  int64 version = 1;
+  bool success = 2;
+  string error = 3;
+}
+
+message CoordinatorResponse {
+  oneof payload {
+    ServerWelcome welcome = 1;
+    PolicySnapshot policy = 2;
+    EventAck ack = 3;
+    ServerPing ping = 4;
+  }
+}
+
+message ServerWelcome {
+  string session_id = 1;
+  string node_id = 2;
+  int64 server_time_unix_nano = 3;
+}
+
+message ServerPing {
+  int64 server_time_unix_nano = 1;
+}
+
+message EventAck {
+  string batch_id = 1;
+  bool success = 2;
+  string error = 3;
+  bool duplicate = 4;
+  bool retryable = 5;
+}
+
+message PolicySnapshot {
+  int64 version = 1;
+  string node_id = 2;
+  int64 generated_at_unix_nano = 3;
+  repeated PolicyRule rules = 4;
+  AgentSettings settings = 5;
+  repeated PolicyMeta policies = 6;
+}
+
+message PolicyRule {
+  string id = 1;
+  string policy_id = 2;
+  string policy_name = 3;
+  RuleKind kind = 4;
+  string value = 5;
+  RuleAction action = 6;
+  string note = 7;
+  // Resolved CIDR prefixes for an ASN rule. Empty for other kinds.
+  repeated string prefixes = 8;
+}
+
+enum RuleKind {
+  RULE_KIND_UNSPECIFIED = 0;
+  RULE_KIND_IP = 1;
+  RULE_KIND_CIDR = 2;
+  RULE_KIND_DOMAIN = 3;
+  RULE_KIND_ASN = 4;
+}
+
+enum RuleAction {
+  RULE_ACTION_UNSPECIFIED = 0;
+  RULE_ACTION_BLOCK = 1;
+}
+
+message AgentSettings {
+  repeated uint32 tls_ports = 1;
+  bool dns_inspection = 2;
+  bool tls_inspection = 3;
+  uint32 batch_max_events = 4;
+  uint32 flush_interval_ms = 5;
+}
+
+message PolicyMeta {
+  string id = 1;
+  string name = 2;
+}

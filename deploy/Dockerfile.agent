@@ -1,0 +1,37 @@
+# syntax=docker/dockerfile:1
+
+# The agent is normally installed on the host because it needs the host network
+# namespace's nftables, conntrack and NFQUEUE. This image is also useful for
+# producing a static musl binary with the SQLite driver compiled in.
+FROM golang:1.27-alpine AS builder
+
+RUN apk add --no-cache build-base musl-dev
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
+
+RUN CGO_ENABLED=1 GOOS=linux CC=gcc go build \
+    -tags "sqlite_omit_load_extension" \
+    -trimpath \
+    -ldflags="-s -w -linkmode external -extldflags '-static' -X github.com/kurwall/kurwall/internal/platform/version.Version=${VERSION} -X github.com/kurwall/kurwall/internal/platform/version.Commit=${COMMIT} -X github.com/kurwall/kurwall/internal/platform/version.BuildDate=${BUILD_DATE}" \
+    -o /out/kurwall-agent \
+    ./cmd/agent
+
+
+FROM alpine:3.23
+
+RUN apk add --no-cache ca-certificates tzdata curl nftables conntrack-tools
+
+COPY --from=builder /out/kurwall-agent /usr/local/bin/kurwall-agent
+
+# The container form of the agent must run in the host network namespace:
+#   docker run --network host --cap-add NET_ADMIN -v /var/run/docker.sock:/var/run/docker.sock ...
+ENTRYPOINT ["/usr/local/bin/kurwall-agent"]

@@ -1,0 +1,29 @@
+[Unit]
+Description=Kurwall node agent
+Documentation=https://github.com/kurwall/kurwall
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=APP_CONFIG_PATH=/etc/kurwall/agent.yaml
+ExecStart=/usr/local/bin/kurwall-agent
+Restart=on-failure
+RestartSec=5s
+
+# nftables, conntrack, NFQUEUE and NFLOG all require CAP_NET_ADMIN.
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/kurwall
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=false
+LimitNOFILE=65536
+OOMScoreAdjust=-200
+
+[Install]
+WantedBy=multi-user.target

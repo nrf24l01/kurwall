@@ -1,0 +1,300 @@
+#!/usr/bin/env bash
+# Kurwall node agent installer and updater.
+#
+# Fresh install:
+#   curl -fsSL {{.BaseURL}}/install.sh | sudo bash
+#
+# Update (keeps the existing config and certificate):
+#   curl -fsSL {{.BaseURL}}/install.sh | sudo bash
+#
+# Fresh install with an existing node certificate:
+#   curl -fsSL {{.BaseURL}}/install.sh | sudo bash -s -- --cert ./agent.crt --key ./agent.key
+#
+# Re-run with --force to rewrite the generated config and unit files.
+set -euo pipefail
+
+BASE_URL='{{.BaseURL}}'
+COORDINATOR_ADDR='{{.GRPCAddr}}'
+DEPLOY_KEY='{{.DeployKey}}'
+
+CERT_SOURCE=""
+KEY_SOURCE=""
+NODE_ID="${KURWALL_NODE_ID:-}"
+FORCE=0
+START=1
+
+usage() {
+  cat <<'EOF'
+Usage: install.sh [options]
+
+Options:
+  --cert PATH       Install this agent certificate as /etc/kurwall/tls/agent.crt
+  --key PATH        Install this agent private key as /etc/kurwall/tls/agent.key
+  --node-id ID      Set node_id in a newly generated agent config
+  --deploy-key KEY  One-time enrollment key; alternative to --cert/--key
+  --force           Rewrite /etc/kurwall/agent.yaml and reinstall the service unit
+  --no-start        Install files without starting or restarting the agent
+  -h, --help        Show this help
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --cert)
+      CERT_SOURCE="${2:?--cert requires a path}"
+      shift 2
+      ;;
+    --key)
+      KEY_SOURCE="${2:?--key requires a path}"
+      shift 2
+      ;;
+    --node-id)
+      NODE_ID="${2:?--node-id requires a value}"
+      shift 2
+      ;;
+    --deploy-key)
+      DEPLOY_KEY="${2:?--deploy-key requires a value}"
+      shift 2
+      ;;
+    --force)
+      FORCE=1
+      shift
+      ;;
+    --no-start)
+      START=0
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "run as root, for example: curl -fsSL $BASE_URL/install.sh | sudo bash" >&2
+  exit 1
+fi
+
+if [ -n "$NODE_ID" ] && ! printf '%s' "$NODE_ID" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+  echo "node id may only contain letters, digits, dots, underscores and dashes" >&2
+  exit 2
+fi
+if [ -n "$DEPLOY_KEY" ] && { [ -n "$CERT_SOURCE" ] || [ -n "$KEY_SOURCE" ]; }; then
+  echo "use either --deploy-key or --cert/--key, not both" >&2
+  exit 2
+fi
+
+machine=$(uname -m)
+case "$machine" in
+  x86_64|amd64) ARCH=amd64 ;;
+  aarch64|arm64) ARCH=arm64 ;;
+  *)
+    echo "unsupported architecture: $machine" >&2
+    exit 1
+    ;;
+esac
+BIN_NAME="kurwall-agent-linux-$ARCH"
+
+for tool in curl sha256sum; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "$tool is required" >&2
+    exit 1
+  fi
+done
+
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+
+echo "Kurwall agent installer"
+echo "  base URL:    $BASE_URL"
+echo "  coordinator: $COORDINATOR_ADDR"
+echo "  platform:    linux-$ARCH"
+
+REMOTE_VERSION=$(curl -fsSL "$BASE_URL/agent/version.txt" 2>/dev/null | tr -d '[:space:]' || true)
+if [ -z "$REMOTE_VERSION" ]; then
+  echo "agent distribution is not published at $BASE_URL/agent" >&2
+  echo "publish build/agent-dist and set KURWALL_AGENT_DIST_DIR on the coordinator" >&2
+  exit 1
+fi
+
+INSTALLED_VERSION=$(/usr/local/bin/kurwall-agent --version 2>/dev/null | tr -d '[:space:]' || true)
+if [ "$FORCE" -eq 0 ] && [ -z "$DEPLOY_KEY" ] && [ -x /usr/local/bin/kurwall-agent ] \
+   && [ -f /etc/kurwall/agent.yaml ] \
+   && [ -n "$INSTALLED_VERSION" ] && [ "$INSTALLED_VERSION" = "$REMOTE_VERSION" ]; then
+  echo "kurwall-agent $REMOTE_VERSION is already installed; re-run with --force to reinstall"
+  exit 0
+fi
+
+TLS_DIR=/etc/kurwall/tls
+install -d -m 0750 /etc/kurwall "$TLS_DIR" /var/lib/kurwall
+
+if [ -n "$DEPLOY_KEY" ]; then
+  command -v openssl >/dev/null 2>&1 || { echo "openssl is required for enrollment" >&2; exit 1; }
+  command -v tar >/dev/null 2>&1 || { echo "tar is required for enrollment" >&2; exit 1; }
+  echo "requesting a node certificate"
+  openssl req -new -newkey rsa:2048 -nodes \
+    -keyout "$TMP/agent.key" -out "$TMP/agent.csr" \
+    -subj "/CN=kurwall-enrollment" >/dev/null 2>&1
+  code=$(curl -sS -o "$TMP/enroll.tgz" -w '%{http_code}' -X POST \
+    -H "X-Deploy-Key: $DEPLOY_KEY" -H 'Content-Type: application/x-pem-file' \
+    --data-binary @"$TMP/agent.csr" "$BASE_URL/api/v1/enroll")
+  if [ "$code" != "200" ]; then
+    echo "enrollment failed (HTTP $code):" >&2
+    cat "$TMP/enroll.tgz" >&2 2>/dev/null || true
+    echo >&2
+    exit 1
+  fi
+  mkdir -p "$TMP/enroll"
+  tar -xzf "$TMP/enroll.tgz" -C "$TMP/enroll"
+  install -m 0600 "$TMP/agent.key" "$TLS_DIR/agent.key"
+  install -m 0644 "$TMP/enroll/agent.crt" "$TLS_DIR/agent.crt"
+  install -m 0644 "$TMP/enroll/ca.crt" "$TLS_DIR/ca.crt"
+  NODE_ID=""
+  echo "node certificate issued"
+else
+  if curl -fsSL "$BASE_URL/agent/ca.crt" -o "$TMP/ca.crt" 2>/dev/null; then
+    install -m 0644 "$TMP/ca.crt" "$TLS_DIR/ca.crt"
+  elif [ -s "$TLS_DIR/ca.crt" ]; then
+    echo "using the existing CA certificate"
+  else
+    echo "CA certificate is unavailable from $BASE_URL/agent/ca.crt" >&2
+    exit 1
+  fi
+
+  if [ -n "$CERT_SOURCE" ]; then
+    [ -s "$CERT_SOURCE" ] || { echo "certificate not found: $CERT_SOURCE" >&2; exit 1; }
+    install -m 0644 "$CERT_SOURCE" "$TLS_DIR/agent.crt"
+  fi
+  if [ -n "$KEY_SOURCE" ]; then
+    [ -s "$KEY_SOURCE" ] || { echo "private key not found: $KEY_SOURCE" >&2; exit 1; }
+    install -m 0600 "$KEY_SOURCE" "$TLS_DIR/agent.key"
+  fi
+fi
+
+if [ ! -s "$TLS_DIR/agent.crt" ] || [ ! -s "$TLS_DIR/agent.key" ]; then
+  cat >&2 <<EOF
+No agent certificate is installed.
+
+The coordinator requires a client certificate for each node. Use a one-time
+deploy key from the dashboard Nodes page, or place the node certificate and
+key in /etc/kurwall/tls (agent.crt and agent.key), then re-run this installer
+with:
+
+  curl -fsSL $BASE_URL/install.sh | sudo bash -s -- --cert agent.crt --key agent.key
+
+The binary and service files were not changed.
+EOF
+  exit 1
+fi
+
+echo "downloading kurwall-agent $REMOTE_VERSION"
+curl -fsSL "$BASE_URL/agent/checksums.txt" -o "$TMP/checksums.txt"
+expected=$(awk -v file="$BIN_NAME" '$2 == file { print $1 }' "$TMP/checksums.txt" | head -n1)
+if [ -z "$expected" ]; then
+  echo "no checksum published for $BIN_NAME" >&2
+  exit 1
+fi
+curl -fsSL "$BASE_URL/agent/$BIN_NAME" -o "$TMP/$BIN_NAME"
+actual=$(sha256sum "$TMP/$BIN_NAME" | awk '{ print $1 }')
+if [ "$expected" != "$actual" ]; then
+  echo "checksum mismatch for $BIN_NAME" >&2
+  exit 1
+fi
+
+install -d -m 0755 /usr/local/bin
+install -m 0755 "$TMP/$BIN_NAME" /usr/local/bin/.kurwall-agent.new
+mv -f /usr/local/bin/.kurwall-agent.new /usr/local/bin/kurwall-agent
+
+if [ ! -f /etc/kurwall/agent.yaml ] || [ "$FORCE" -eq 1 ]; then
+  umask 027
+  cat > /etc/kurwall/agent.yaml <<EOF
+# Generated by the Kurwall installer on $(date -u +%Y-%m-%dT%H:%M:%SZ).
+# APP_CONFIG_PATH must point at this file.
+
+# Empty means "use the common name of the agent certificate".
+node_id: "$NODE_ID"
+
+coordinator_addr: "$COORDINATOR_ADDR"
+
+tls:
+  enabled: true
+  ca_file: /etc/kurwall/tls/ca.crt
+  cert_file: /etc/kurwall/tls/agent.crt
+  key_file: /etc/kurwall/tls/agent.key
+  server_name: "kurwall-coordinator"
+
+state:
+  sqlite_path: /var/lib/kurwall/agent.db
+
+inspection:
+  dns_enabled: true
+  tls_enabled: true
+  tls_ports: [443]
+  dns_queue_num: 0
+  tls_queue_num: 1
+  queue_max_len: 2048
+  queue_max_packet: 4096
+  dns_response_timeout: 5s
+  blocked_conn_ttl: 5m
+  flow_snapshot_interval: 1s
+
+firewall:
+  enabled: true
+  table_name: kurwall
+  block_log_group: 5
+
+docker:
+  enabled: true
+  socket: /var/run/docker.sock
+  refresh_interval: 15s
+
+events:
+  batch_max_events: 500
+  flush_interval: 1s
+  max_outbox_batches: 100000
+  retry_min: 1s
+  retry_max: 60s
+  send_timeout: 30s
+  max_attempts: 10
+  heartbeat_interval: 15s
+  reconnect_max: 60s
+
+metrics:
+  addr: "127.0.0.1:9877"
+
+log:
+  level: info
+  format: json
+EOF
+  chmod 0640 /etc/kurwall/agent.yaml
+  echo "wrote /etc/kurwall/agent.yaml"
+else
+  echo "keeping existing /etc/kurwall/agent.yaml"
+fi
+
+curl -fsSL "$BASE_URL/agent/kurwall-agent.service" -o "$TMP/kurwall-agent.service"
+install -m 0644 "$TMP/kurwall-agent.service" /etc/systemd/system/kurwall-agent.service
+curl -fsSL "$BASE_URL/agent/99-kurwall.conf" -o "$TMP/99-kurwall.conf"
+install -m 0644 "$TMP/99-kurwall.conf" /etc/sysctl.d/99-kurwall.conf
+sysctl --system >/dev/null 2>&1 || true
+for module in nf_conntrack nf_conntrack_netlink nfnetlink_queue nfnetlink_log; do
+  modprobe "$module" 2>/dev/null || true
+done
+
+systemctl daemon-reload
+systemctl enable kurwall-agent.service >/dev/null 2>&1 || true
+if [ "$START" -eq 1 ]; then
+  systemctl restart kurwall-agent.service
+  systemctl --no-pager status kurwall-agent.service | head -n 20 || true
+else
+  echo "not starting the agent (--no-start)"
+fi
+
+echo "kurwall-agent $REMOTE_VERSION installed"
+echo "logs: journalctl -u kurwall-agent -f"
