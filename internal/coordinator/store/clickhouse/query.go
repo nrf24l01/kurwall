@@ -266,7 +266,7 @@ func (s *Store) Blocks(ctx context.Context, q domain.BlockQuery) ([]domain.Block
 	return out, total, rows.Err()
 }
 
-// trafficFlowColumns and trafficBlockColumns are the 24 columns of the two
+// trafficFlowColumns and trafficBlockColumns are the 25 columns of the two
 // union branches, in the shared output order scanned by Store.Traffic.
 var trafficFlowColumns = []string{
 	"event_id",
@@ -293,6 +293,7 @@ var trafficFlowColumns = []string{
 	"false AS blocked",
 	"rule_id",
 	"reason",
+	"network",
 }
 
 var trafficBlockColumns = []string{
@@ -320,6 +321,7 @@ var trafficBlockColumns = []string{
 	"true AS blocked",
 	"rule_id",
 	"reason",
+	"'' AS network",
 }
 
 // trafficBranches reports which storage tables a decision filter includes.
@@ -462,7 +464,7 @@ func (s *Store) Traffic(ctx context.Context, q domain.TrafficQuery) ([]domain.Tr
 			&src, &dst, &e.SrcPort, &e.DstPort, &e.Protocol, &e.Domain, &e.SNI,
 			&e.Target, &e.BlockKind, &e.ContainerID, &e.ContainerName,
 			&e.BytesIn, &e.BytesOut, &e.PacketsIn, &e.PacketsOut,
-			&e.Blocked, &e.RuleID, &e.Reason); err != nil {
+			&e.Blocked, &e.RuleID, &e.Reason, &e.Network); err != nil {
 			return nil, 0, apperr.Internal("scan traffic event", err)
 		}
 		e.SrcIP = formatRawIP(src)

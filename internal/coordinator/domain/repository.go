@@ -190,6 +190,7 @@ type TrafficEvent struct {
 	Blocked       bool      `json:"blocked"`
 	RuleID        string    `json:"ruleId"`
 	Reason        string    `json:"reason"`
+	Network       string    `json:"network,omitempty"`
 	DstASN        int64     `json:"dstAsn,omitempty"`
 	DstCountry    string    `json:"dstCountry,omitempty"`
 }

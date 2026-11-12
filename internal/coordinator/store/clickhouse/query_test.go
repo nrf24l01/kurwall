@@ -46,7 +46,7 @@ func TestTrafficColumnOrder(t *testing.T) {
 		"src_ip", "dst_ip", "src_port", "dst_port", "protocol",
 		"domain", "sni", "target", "block_kind",
 		"container_id", "container_name", "bytes_in", "bytes_out",
-		"packets_in", "packets_out", "blocked", "rule_id", "reason",
+		"packets_in", "packets_out", "blocked", "rule_id", "reason", "network",
 	}
 	branches := []struct {
 		name string

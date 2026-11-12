@@ -15,11 +15,12 @@ import (
 )
 
 const (
-	maxStringLen  = 512
-	maxAnswers    = 32
-	maxEventSkew  = 24 * time.Hour
-	maxQueryRange = 90 * 24 * time.Hour
-	earliestEvent = 946684800 // 2000-01-01
+	maxStringLen     = 512
+	maxAnswers       = 32
+	maxEventSkew     = 24 * time.Hour
+	maxQueryRange    = 90 * 24 * time.Hour
+	earliestEvent    = 946684800 // 2000-01-01
+	asnLookupTimeout = 2 * time.Second
 )
 
 // EventPublisher fans persisted events out to live dashboard clients.
@@ -80,7 +81,12 @@ func (s *Events) Ingest(ctx context.Context, nodeID, batchID string, events []*k
 	// Enrich live frames after persistence so history stays the source of truth;
 	// ASN lookup failures only omit the optional fields.
 	if s.publisher != nil {
-		enrichTrafficASN(converted, s.asnInfo(ctx, trafficDestinationIPs(converted)))
+		// ASN data is best-effort display enrichment: a catalog replace can
+		// hold locks on the ASN tables, so bound the lookup instead of letting
+		// it delay the batch acknowledgement on the stream context.
+		lookupCtx, cancel := context.WithTimeout(ctx, asnLookupTimeout)
+		enrichTrafficASN(converted, s.asnInfo(lookupCtx, trafficDestinationIPs(converted)))
+		cancel()
 		s.publisher.PublishEvents(nodeID, converted)
 	}
 	if err := s.repo.CommitBatch(ctx, nodeID, batchID, time.Now().UTC()); err != nil {
@@ -374,7 +380,9 @@ func (s *Events) Traffic(ctx context.Context, q domain.TrafficQuery) (domain.Pag
 			dstIPs = append(dstIPs, item.DstIP)
 		}
 	}
-	info := s.asnInfo(ctx, dstIPs)
+	lookupCtx, cancel := context.WithTimeout(ctx, asnLookupTimeout)
+	info := s.asnInfo(lookupCtx, dstIPs)
+	cancel()
 	for i := range items {
 		if asn, ok := info[items[i].DstIP]; ok {
 			items[i].DstASN = asn.ASN

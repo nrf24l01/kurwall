@@ -77,7 +77,8 @@ function qtypeName(value: number): string {
 }
 
 function endpoint(ip: string, port: number): string {
-  return `${ip}${port > 0 ? `:${port}` : ''}`
+  const host = ip.includes(':') ? `[${ip}]` : ip
+  return `${host}${port > 0 ? `:${port}` : ''}`
 }
 
 function targetLabel(event: TrafficEvent): string {
@@ -163,6 +164,7 @@ function flowToTraffic(flow: Flow): TrafficEvent {
     blocked: false,
     ruleId: flow.ruleId,
     reason: flow.reason,
+    network: flow.network,
     dstAsn: flow.dstAsn,
     dstCountry: flow.dstCountry,
   }
@@ -262,12 +264,18 @@ function showTraffic(event: TrafficEvent) {
       { label: 'Bytes', value: `${formatBytes(event.bytesOut ?? 0)} out / ${formatBytes(event.bytesIn ?? 0)} in` },
       { label: 'Packets', value: `${formatNumber(event.packetsOut ?? 0)} out / ${formatNumber(event.packetsIn ?? 0)} in` },
       { label: 'Duration', value: formatDuration(event.durationMs ?? 0) },
+      { label: 'Network', value: event.network || '—' },
     )
   }
   const asn = event.dstAsn ? `AS${event.dstAsn}` : ''
   const country = event.dstCountry ? `${countryFlag(event.dstCountry)} ${event.dstCountry}`.trim() : ''
   fields.push(
     { label: 'ASN / country', value: [asn, country].filter(Boolean).join(' · ') || '—' },
+  )
+  if (event.kind === 'block' && event.blockKind === 'dns') {
+    fields.push({ label: 'ASN source', value: 'Resolver IP; the blocked domain itself has no ASN.' })
+  }
+  fields.push(
     { label: 'Rule', value: event.ruleId || '—' },
     { label: 'Reason', value: event.reason || '—' },
     { label: 'Event ID', value: event.eventId },
@@ -297,6 +305,11 @@ watch([range, nodeId, filter], () => {
   load()
 })
 watch(offset, load)
+// Resuming live mode replays history so events missed while paused do not
+// leave a silent gap until the next manual refresh.
+watch(live, (on) => {
+  if (on) load()
+})
 useRefresh(load)
 onMounted(async () => {
   try {

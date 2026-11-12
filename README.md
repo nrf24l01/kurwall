@@ -200,6 +200,11 @@ The coordinator needs outbound HTTPS access to the configured sources. A rule
 that resolves to more than `max_prefixes` is rejected so a single rule cannot
 produce an unbounded nftables set.
 
+`KURWALL_ASN_CATALOG_URL` (or `asn.catalog_url`) can point at a mirror of the
+iptoasn combined feed when the default iptoasn host is slow or unreachable from
+your network. The mirror is third-party display data; prefer an HTTPS mirror
+when one is available. The default remains the HTTPS iptoasn URL.
+
 Useful defaults:
 
 - REST `:8080`, gRPC `:9090`, dashboard served from `/app/web`.
@@ -297,6 +302,7 @@ All responses use one envelope:
 | `GET /api/v1/events/flows` | Connection history |
 | `GET /api/v1/events/dns` | DNS history |
 | `GET /api/v1/events/blocks` | Blocking events |
+| `GET /api/v1/events/traffic` | Unified allowed/blocked feed (`nodeId`, `from`, `to`, `decision`, `domain`, `ip`, `srcIp`, `dstIp`, `container`, `protocol`, `limit`, `offset`) |
 | `GET /api/v1/stats/overview` | Dashboard counters |
 | `POST /api/v1/stream-ticket` | Issue a short-lived live-stream ticket |
 | `GET /api/v1/stream?ticket=…` | WebSocket live traffic and node status |
@@ -319,14 +325,17 @@ automation. When no users and no token exist, the API is open.
 ## Storage
 
 **PostgreSQL** — nodes, policies, rules, node assignments, immutable policy
-revisions, event-batch idempotency records, the ASN prefix cache, and the
-searchable ASN directory. Goose migrations run at startup and are embedded in
-the binary.
+revisions, event-batch idempotency records, the ASN prefix cache, the
+searchable ASN directory, and the ASN range catalog (`asn_ranges`) used to
+enrich traffic events with destination ASN and country. Goose migrations run at
+startup and are embedded in the binary.
 
 **ClickHouse** — `flows`, `dns_events`, `block_events`. Typed columns use
 `LowCardinality`, `T64`, `DoubleDelta` and ZSTD codecs; tables are partitioned by
 day and TTL-deleted after 30 days. Inserts are batched per agent batch. A batch
-claim in PostgreSQL prevents duplicate ingestion in the normal retry path.
+claim in PostgreSQL prevents duplicate ingestion in the normal retry path. The
+traffic API unions `flows` and `block_events` in one query and enriches the
+result with destination ASN and country from `asn_ranges`.
 
 **SQLite (agent)** — WAL-mode outbox of encoded protobuf batches and the last
 applied policy snapshot. At 15 events/s the default outbox cap (100k batches)

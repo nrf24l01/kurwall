@@ -22,10 +22,17 @@ type stubASNRepo struct {
 	calls [][]string
 	info  map[string]domain.ASNInfo
 	err   error
+	// block makes the lookup wait for its context deadline, simulating a
+	// catalog replace holding locks on the ASN tables.
+	block bool
 }
 
-func (s *stubASNRepo) LookupASNForIPs(_ context.Context, ips []string) (map[string]domain.ASNInfo, error) {
+func (s *stubASNRepo) LookupASNForIPs(ctx context.Context, ips []string) (map[string]domain.ASNInfo, error) {
 	s.calls = append(s.calls, ips)
+	if s.block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	return s.info, s.err
 }
 
@@ -206,6 +213,38 @@ func TestIngestEnrichesPublishedEvents(t *testing.T) {
 				t.Fatalf("published flow ASN = (%d, %q), want (%d, %q)", flow.DstASN, flow.DstCountry, tc.wantASN, tc.wantCountry)
 			}
 		})
+	}
+}
+
+func TestIngestASNLookupTimeoutStillPublishes(t *testing.T) {
+	now := time.Now().UnixNano()
+	writer, publisher := &stubWriter{}, &stubPublisher{}
+	repo := &stubASNRepo{block: true}
+	svc := &Events{repo: repo, writer: writer, publisher: publisher, maxBatch: 10, dedupTimeout: time.Minute}
+
+	started := time.Now()
+	duplicate, err := svc.Ingest(context.Background(), "node-1", "batch-1", []*kurwallv1.NetworkEvent{{
+		EventId: "evt-1",
+		Event: &kurwallv1.NetworkEvent_Flow{Flow: &kurwallv1.FlowEvent{
+			SrcIp: "10.0.0.1", DstIp: "203.0.113.10",
+			StartedAtUnixNano: now, EndedAtUnixNano: now,
+		}},
+	}})
+	elapsed := time.Since(started)
+	if err != nil || duplicate {
+		t.Fatalf("Ingest = (%v, %v), want (false, nil)", duplicate, err)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("Ingest took %s, want a bounded ASN lookup deadline", elapsed)
+	}
+	if len(writer.events) != 1 {
+		t.Fatalf("writer received %d events, want 1", len(writer.events))
+	}
+	if len(publisher.events) != 1 || publisher.events[0].Flow == nil {
+		t.Fatalf("published events = %+v, want one flow despite ASN timeout", publisher.events)
+	}
+	if publisher.events[0].Flow.DstASN != 0 {
+		t.Fatalf("timed-out lookup enriched the flow: %+v", publisher.events[0].Flow)
 	}
 }
 

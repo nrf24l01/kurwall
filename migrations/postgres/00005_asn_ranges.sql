@@ -1,4 +1,8 @@
 -- +goose Up
+-- Deliberately no primary key or unique constraint: a multi-origin prefix can
+-- produce several ranges sharing the same start_ip. Lookups use
+-- start_ip <= ip ORDER BY start_ip DESC LIMIT 1, and the whole table is
+-- replaced atomically on catalog refresh.
 CREATE TABLE IF NOT EXISTS asn_ranges (
     start_ip inet NOT NULL,
     end_ip   inet NOT NULL,

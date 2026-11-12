@@ -290,6 +290,7 @@ export interface TrafficEvent {
   blocked: boolean
   ruleId?: string
   reason?: string
+  network?: string
   dstAsn?: number
   dstCountry?: string
 }
