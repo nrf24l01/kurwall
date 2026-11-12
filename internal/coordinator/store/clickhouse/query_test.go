@@ -201,3 +201,64 @@ func TestBuildTrafficQueryExcludeLocal(t *testing.T) {
 		t.Fatalf("excludeLocal predicate leaked into the default query:\n%s", without)
 	}
 }
+
+func TestBuildTrafficQueryConditions(t *testing.T) {
+	from := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
+	to := from.Add(time.Hour)
+	q := domain.TrafficQuery{
+		From: from, To: to, Match: "all",
+		Conditions: []domain.TrafficCondition{
+			{Field: "ip.dst", Operator: "eq", Value: "8.8.8.8"},
+			{Field: "decision", Operator: "eq", Value: "blocked", Negate: true},
+			{Field: "domain", Operator: "contains", Value: "example"},
+		},
+	}
+	query, args, err := buildTrafficQuery(q, true, true)
+	if err != nil {
+		t.Fatalf("buildTrafficQuery: %v", err)
+	}
+	for _, fragment := range []string{
+		"SELECT * FROM (",
+		" WHERE (",
+		"dst_ip = toIPv6(?)",
+		"NOT (blocked = ?)",
+		"positionCaseInsensitive(domain, ?) > 0",
+		"positionCaseInsensitive(sni, ?) > 0",
+		"positionCaseInsensitive(target, ?) > 0",
+		" AND ",
+	} {
+		if !strings.Contains(query, fragment) {
+			t.Fatalf("condition query is missing %q:\n%s", fragment, query)
+		}
+	}
+	if len(args) < 7 {
+		t.Fatalf("args = %#v, want branch and condition arguments", args)
+	}
+
+	anyQuery, _, err := buildTrafficQuery(domain.TrafficQuery{
+		From: from, To: to, Match: "any",
+		Conditions: []domain.TrafficCondition{
+			{Field: "protocol", Operator: "eq", Value: "tcp"},
+			{Field: "port", Operator: "eq", Value: "443"},
+		},
+	}, true, true)
+	if err != nil {
+		t.Fatalf("buildTrafficQuery any: %v", err)
+	}
+	if !strings.Contains(anyQuery, " OR ") {
+		t.Fatalf("any query is missing OR:\n%s", anyQuery)
+	}
+	if !strings.Contains(anyQuery, "src_port = ?") || !strings.Contains(anyQuery, "dst_port = ?") {
+		t.Fatalf("port condition is missing either side:\n%s", anyQuery)
+	}
+
+	for _, bad := range []domain.TrafficQuery{
+		{From: from, To: to, Conditions: []domain.TrafficCondition{{Field: "nope", Operator: "eq", Value: "x"}}},
+		{From: from, To: to, Conditions: []domain.TrafficCondition{{Field: "ip.dst", Operator: "contains", Value: "8.8.8.8"}}},
+		{From: from, To: to, Conditions: []domain.TrafficCondition{{Field: "port", Operator: "eq", Value: "not-a-port"}}},
+	} {
+		if _, _, err := buildTrafficQuery(bad, true, true); err == nil {
+			t.Fatalf("expected validation error for %+v", bad)
+		}
+	}
+}

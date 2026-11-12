@@ -267,6 +267,15 @@ export interface BlockEvent {
   dstCountry?: string
 }
 
+export type TrafficMatch = 'all' | 'any'
+
+export interface TrafficCondition {
+  field: string
+  operator: string
+  value: string
+  negate: boolean
+}
+
 export interface TrafficEvent {
   kind: 'connection' | 'block'
   eventId: string

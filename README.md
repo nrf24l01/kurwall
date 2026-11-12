@@ -251,6 +251,18 @@ Frames carry persisted events and node status changes. Live delivery is
 best-effort; ClickHouse remains the complete history. Overview shows the last
 live frames and Events can prepend new matching rows while its Live chip is on.
 
+The Events → Traffic filter builder is persisted in the browser (`localStorage`)
+across reloads: the date-time window, node, condition rows, match mode,
+exclude-local and live state. Condition rows use Wireshark-style fields such as
+`ip.addr`, `ip.src`, `ip.dst`, `port`, `src.port`, `dst.port`, `protocol`,
+`domain`, `sni`, `target`, `event.kind`, `decision`, `block.kind`, `container`,
+`bytes.out`, `bytes.in`, `duration` and `reason`, with operators `is`, `is not`,
+`contains`, `does not contain`, `starts with`, `ends with`, `greater than`,
+`at least`, `less than` and `at most`. Rows combine with **Match all** (AND) or
+**Match any** (OR); the `!` button negates a row. The API accepts the rows as a
+JSON `filter` query parameter and a `match=all|any` parameter; values are
+validated and parameterized server-side.
+
 Domain semantics:
 
 - `example.com` blocks the domain and every subdomain.
@@ -302,7 +314,7 @@ All responses use one envelope:
 | `GET /api/v1/events/flows` | Connection history |
 | `GET /api/v1/events/dns` | DNS history |
 | `GET /api/v1/events/blocks` | Blocking events |
-| `GET /api/v1/events/traffic` | Unified allowed/blocked feed (`nodeId`, `from`, `to`, `decision`, `domain`, `ip`, `srcIp`, `dstIp`, `container`, `protocol`, `excludeLocal`, `limit`, `offset`) |
+| `GET /api/v1/events/traffic` | Unified allowed/blocked feed (`nodeId`, `from`, `to`, `decision`, `domain`, `ip`, `srcIp`, `dstIp`, `container`, `protocol`, `excludeLocal`, `filter`, `match`, `limit`, `offset`) |
 | `GET /api/v1/stats/overview` | Dashboard counters |
 | `POST /api/v1/stream-ticket` | Issue a short-lived live-stream ticket |
 | `GET /api/v1/stream?ticket=…` | WebSocket live traffic and node status |

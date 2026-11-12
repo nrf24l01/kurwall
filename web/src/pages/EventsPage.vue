@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ConsoleDialog from '@/components/console/ConsoleDialog.vue'
+import TrafficConditionBuilder from '@/components/events/TrafficConditionBuilder.vue'
 import PageHead from '@/components/console/PageHead.vue'
 import StatusMark from '@/components/console/StatusMark.vue'
-import { api, errorMessage, type BlockEvent, type DnsEvent, type Flow, type Node, type Page, type TrafficEvent } from '@/lib/api'
+import { api, errorMessage, type BlockEvent, type DnsEvent, type Flow, type Node, type Page, type TrafficCondition, type TrafficEvent, type TrafficMatch } from '@/lib/api'
 import { liveBlocks, liveConnected, liveDns, liveFlows } from '@/lib/live'
 import { countryFlag, formatBytes, formatDuration, formatNumber, formatTime, protocolName } from '@/lib/utils'
+import { fieldDefinition } from '@/lib/trafficFilters'
 import { useRefresh } from '@/lib/ui'
 
 type Tab = 'traffic' | 'dns'
@@ -16,6 +18,8 @@ const search = ref('')
 const container = ref('')
 const ip = ref('')
 const filter = ref('all')
+const match = ref<TrafficMatch>('all')
+const conditions = ref<TrafficCondition[]>([])
 const excludeLocal = ref(false)
 const limit = 50
 const offset = ref(0)
@@ -68,30 +72,106 @@ const windowLabel = computed(() => {
   const to = toInput.value.replace('T', ' ')
   return from && to ? `${from} → ${to}` : 'custom range'
 })
-const noFilters = computed(
-  () =>
+const completeConditions = computed(() =>
+  conditions.value.filter((condition) => condition.field && condition.operator && condition.value.trim()),
+)
+const conditionSignature = computed(() =>
+  JSON.stringify({ match: match.value, conditions: completeConditions.value }),
+)
+const noFilters = computed(() => {
+  if (tab.value === 'traffic') {
+    return nodeId.value === 'all' && !excludeLocal.value && completeConditions.value.length === 0
+  }
+  return (
     nodeId.value === 'all' &&
     !search.value.trim() &&
     !container.value.trim() &&
     !ip.value.trim() &&
-    filter.value === 'all' &&
-    !excludeLocal.value,
-)
-
-const filterOptions = computed(() => {
-  if (tab.value === 'traffic') {
-    return [
-      { value: 'all', label: 'Any decision' },
-      { value: 'allowed', label: 'Allowed' },
-      { value: 'blocked', label: 'Blocked' },
-    ]
-  }
-  return [
-    { value: 'all', label: 'Any result' },
-    { value: 'allowed', label: 'Resolved' },
-    { value: 'blocked', label: 'Blocked' },
-  ]
+    filter.value === 'all'
+  )
 })
+
+const filterOptions = [
+  { value: 'all', label: 'Any result' },
+  { value: 'allowed', label: 'Resolved' },
+  { value: 'blocked', label: 'Blocked' },
+]
+
+const EVENTS_STORAGE_KEY = 'kurwall.events.filters.v1'
+
+interface StoredEventsFilters {
+  from: string
+  to: string
+  nodeId: string
+  match: TrafficMatch
+  conditions: TrafficCondition[]
+  excludeLocal: boolean
+  live: boolean
+  tab: Tab
+  search: string
+  container: string
+  ip: string
+  filter: string
+}
+
+function restoreFilters() {
+  try {
+    const raw = localStorage.getItem(EVENTS_STORAGE_KEY)
+    if (!raw) return
+    const data = JSON.parse(raw) as Partial<StoredEventsFilters>
+    if (typeof data.from === 'string' && data.from) fromInput.value = data.from
+    if (typeof data.to === 'string' && data.to) toInput.value = data.to
+    if (typeof data.nodeId === 'string') nodeId.value = data.nodeId
+    if (data.match === 'all' || data.match === 'any') match.value = data.match
+    if (Array.isArray(data.conditions)) {
+      conditions.value = data.conditions
+        .filter((condition) => {
+          if (!condition || typeof condition.field !== 'string' || typeof condition.operator !== 'string') return false
+          const definition = fieldDefinition(condition.field)
+          return Boolean(definition && definition.operators.includes(condition.operator) && typeof condition.value === 'string')
+        })
+        .map((condition) => ({
+          field: condition.field,
+          operator: condition.operator,
+          value: condition.value,
+          negate: Boolean(condition.negate),
+        }))
+    }
+    if (typeof data.excludeLocal === 'boolean') excludeLocal.value = data.excludeLocal
+    if (typeof data.live === 'boolean') live.value = data.live
+    if (data.tab === 'traffic' || data.tab === 'dns') tab.value = data.tab
+    if (typeof data.search === 'string') search.value = data.search
+    if (typeof data.container === 'string') container.value = data.container
+    if (typeof data.ip === 'string') ip.value = data.ip
+    if (typeof data.filter === 'string') filter.value = data.filter
+  } catch {
+    // Ignore a corrupt or stale stored filter; the defaults still work.
+  }
+}
+
+function saveFilters() {
+  const state: StoredEventsFilters = {
+    from: fromInput.value,
+    to: toInput.value,
+    nodeId: nodeId.value,
+    match: match.value,
+    conditions: conditions.value,
+    excludeLocal: excludeLocal.value,
+    live: live.value,
+    tab: tab.value,
+    search: search.value,
+    container: container.value,
+    ip: ip.value,
+    filter: filter.value,
+  }
+  try {
+    localStorage.setItem(EVENTS_STORAGE_KEY, JSON.stringify(state))
+  } catch {
+    // Storage can be unavailable in private modes; filtering still works.
+  }
+}
+
+restoreFilters()
 
 function qtypeName(value: number): string {
   const names: Record<number, string> = { 1: 'A', 2: 'NS', 5: 'CNAME', 6: 'SOA', 12: 'PTR', 15: 'MX', 16: 'TXT', 28: 'AAAA', 33: 'SRV', 64: 'SVCB', 65: 'HTTPS' }
@@ -119,12 +199,20 @@ function egressLabel(event: TrafficEvent): string {
 }
 
 let searchTimer: number | undefined
+let conditionTimer: number | undefined
 let skipSearchWatch = false
 
 function cancelSearch() {
   if (searchTimer !== undefined) {
     window.clearTimeout(searchTimer)
     searchTimer = undefined
+  }
+}
+
+function cancelConditions() {
+  if (conditionTimer !== undefined) {
+    window.clearTimeout(conditionTimer)
+    conditionTimer = undefined
   }
 }
 
@@ -155,7 +243,6 @@ async function load() {
   activeTo.value = toDate.toISOString()
   const common = {
     nodeId: nodeId.value === 'all' ? undefined : nodeId.value,
-    container: container.value || undefined,
     limit,
     offset: offset.value,
     from: activeFrom.value || undefined,
@@ -165,14 +252,14 @@ async function load() {
     if (tab.value === 'traffic') {
       traffic.value = await api.traffic({
         ...common,
-        domain: search.value || undefined,
-        ip: ip.value || undefined,
-        decision: filter.value === 'all' ? undefined : filter.value,
         excludeLocal: excludeLocal.value || undefined,
+        match: match.value,
+        filter: completeConditions.value.length > 0 ? JSON.stringify(completeConditions.value) : undefined,
       })
     } else {
       dns.value = await api.dns({
         ...common,
+        container: container.value || undefined,
         domain: search.value || undefined,
         clientIp: ip.value || undefined,
         blocked: filter.value === 'all' ? undefined : filter.value === 'blocked',
@@ -194,7 +281,6 @@ async function loadMore() {
   error.value = ''
   const common = {
     nodeId: nodeId.value === 'all' ? undefined : nodeId.value,
-    container: container.value || undefined,
     limit,
     from: activeFrom.value || undefined,
     to: activeTo.value,
@@ -206,10 +292,9 @@ async function loadMore() {
       const next = await api.traffic({
         ...common,
         offset: current.items.length,
-        domain: search.value || undefined,
-        ip: ip.value || undefined,
-        decision: filter.value === 'all' ? undefined : filter.value,
         excludeLocal: excludeLocal.value || undefined,
+        match: match.value,
+        filter: completeConditions.value.length > 0 ? JSON.stringify(completeConditions.value) : undefined,
       })
       const seen = new Set(current.items.map((item) => item.eventId))
       const items = [...current.items, ...next.items.filter((item) => !seen.has(item.eventId))]
@@ -220,6 +305,7 @@ async function loadMore() {
       if (!current || current.items.length >= current.total) return
       const next = await api.dns({
         ...common,
+        container: container.value || undefined,
         offset: current.items.length,
         domain: search.value || undefined,
         clientIp: ip.value || undefined,
@@ -333,12 +419,14 @@ watch([liveFlows, liveBlocks], ([flows, blocks], [prevFlows, prevBlocks]) => {
 
 function applyFilters() {
   cancelSearch()
+  cancelConditions()
   offset.value = 0
   load()
 }
 
 function resetFilters() {
   cancelSearch()
+  cancelConditions()
   if (search.value !== '') {
     skipSearchWatch = true
     search.value = ''
@@ -346,6 +434,8 @@ function resetFilters() {
   container.value = ''
   ip.value = ''
   filter.value = 'all'
+  match.value = 'all'
+  conditions.value = []
   excludeLocal.value = false
   nodeId.value = 'all'
   defaultWindow()
@@ -356,6 +446,7 @@ function resetFilters() {
 function changeTab(value: Tab) {
   if (tab.value === value) return
   cancelSearch()
+  cancelConditions()
   tab.value = value
   filter.value = 'all'
   offset.value = 0
@@ -427,11 +518,21 @@ watch([nodeId, filter, excludeLocal], () => {
   offset.value = 0
   load()
 })
+watch(conditionSignature, () => {
+  if (tab.value !== 'traffic') return
+  cancelConditions()
+  conditionTimer = window.setTimeout(() => {
+    conditionTimer = undefined
+    offset.value = 0
+    load()
+  }, 300)
+})
 watch(search, () => {
   if (skipSearchWatch) {
     skipSearchWatch = false
     return
   }
+  if (tab.value !== 'dns') return
   cancelSearch()
   searchTimer = window.setTimeout(() => {
     searchTimer = undefined
@@ -444,6 +545,11 @@ watch(search, () => {
 watch(live, (on) => {
   if (on) load()
 })
+watch(
+  [fromInput, toInput, nodeId, match, conditions, excludeLocal, live, tab, search, container, ip, filter],
+  () => saveFilters(),
+  { deep: true },
+)
 useRefresh(load)
 onMounted(async () => {
   try {
@@ -456,6 +562,7 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => {
   cancelSearch()
+  cancelConditions()
   window.removeEventListener('scroll', maybeLoadMore)
 })
 </script>
@@ -503,21 +610,23 @@ onBeforeUnmount(() => {
       <div style="width: 210px">
         <input v-model="toInput" class="pc-inp" type="datetime-local" aria-label="To date and time" title="To" @change="applyFilters" />
       </div>
-      <div class="grow">
-        <input v-model="search" class="pc-inp" :placeholder="tab === 'traffic' ? 'Domain / target' : 'Domain'" type="search" />
-      </div>
-      <div style="width: 160px">
-        <input v-model="container" class="pc-inp" placeholder="Container" type="search" />
-      </div>
-      <div style="width: 190px">
-        <input v-model="ip" class="pc-inp" placeholder="IP address" type="search" />
-      </div>
-      <div style="width: 160px">
-        <select v-model="filter" class="pc-inp" aria-label="Filter">
-          <option v-for="option in filterOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-        </select>
-      </div>
-      <button class="pc-btn" type="submit" :disabled="loading">Search</button>
+      <template v-if="tab === 'dns'">
+        <div class="grow">
+          <input v-model="search" class="pc-inp" placeholder="Domain" type="search" />
+        </div>
+        <div style="width: 160px">
+          <input v-model="container" class="pc-inp" placeholder="Container" type="search" />
+        </div>
+        <div style="width: 190px">
+          <input v-model="ip" class="pc-inp" placeholder="IP address" type="search" />
+        </div>
+        <div style="width: 160px">
+          <select v-model="filter" class="pc-inp" aria-label="Filter">
+            <option v-for="option in filterOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+          </select>
+        </div>
+        <button class="pc-btn" type="submit" :disabled="loading">Search</button>
+      </template>
       <button class="pc-btn pc-ghost" type="button" @click="resetFilters">Reset</button>
       <button
         v-if="tab === 'traffic'"
@@ -534,6 +643,12 @@ onBeforeUnmount(() => {
         {{ live ? 'Live' : 'Paused' }}
       </button>
     </form>
+
+    <TrafficConditionBuilder
+      v-if="tab === 'traffic'"
+      v-model:conditions="conditions"
+      v-model:match="match"
+    />
 
     <div class="areas">
       <section class="area">

@@ -413,3 +413,36 @@
 
 /* Native date/time pickers on the dark console. */
 input[type="datetime-local"] { color-scheme: dark; }
+
+/* Wireshark-style traffic condition rows. */
+.filter-builder {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px var(--pad-x);
+  border-bottom: 1px solid var(--overlay);
+}
+.filter-builder-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.filter-expr {
+  flex: 1; min-width: 160px; overflow-x: auto; white-space: nowrap;
+  padding: 5px 8px; border: 1px solid var(--overlay); background: var(--base);
+  color: var(--text); font-size: 11px; line-height: 16px;
+}
+.filter-match { width: 170px; flex: none; }
+.filter-empty { color: var(--subtle); font-size: var(--fs-sm); padding: 2px 0; }
+.filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.filter-connector { width: 34px; flex: none; color: var(--muted); font-size: 10px; letter-spacing: .08em; }
+.filter-negate {
+  width: 24px; height: 24px; flex: none; padding: 0;
+  border: 1px solid var(--hl-high); background: transparent; color: var(--subtle);
+}
+.filter-negate[aria-pressed="true"] { background: var(--text); border-color: var(--text); color: var(--black); }
+.filter-row .pc-inp { height: 30px; font-size: 12px; }
+.filter-field { flex: 1 1 160px; min-width: 0; }
+.filter-operator { flex: 1 1 130px; min-width: 0; }
+.filter-value { flex: 2 1 200px; min-width: 0; }
+.filter-remove { flex: none; width: 30px; height: 30px; padding: 0; font-size: 16px; }
+
+@media (max-width: 760px) {
+  .filter-match { width: 100%; }
+  .filter-connector { width: 100%; height: 12px; }
+  .filter-field, .filter-operator, .filter-value { flex: 1 1 100%; }
+}

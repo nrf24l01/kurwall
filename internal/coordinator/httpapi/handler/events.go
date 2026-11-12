@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"encoding/json"
+
 	"github.com/labstack/echo/v4"
 
 	"github.com/kurwall/kurwall/internal/coordinator/domain"
@@ -142,10 +144,17 @@ func (h *Handler) ListTraffic(c echo.Context) error {
 	if err != nil {
 		return response.Error(c, err)
 	}
+	var conditions []domain.TrafficCondition
+	if raw := c.QueryParam("filter"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &conditions); err != nil {
+			return response.Error(c, apperr.Validation("filter must be a JSON array of conditions"))
+		}
+	}
 	page, err := h.Events.Traffic(c.Request().Context(), domain.TrafficQuery{
 		NodeID: c.QueryParam("nodeId"), SrcIP: c.QueryParam("srcIp"), DstIP: c.QueryParam("dstIp"),
 		IP: c.QueryParam("ip"), Domain: c.QueryParam("domain"), Container: c.QueryParam("container"),
 		Decision: decision, ExcludeLocal: excludeLocal != nil && *excludeLocal,
+		Match: c.QueryParam("match"), Conditions: conditions,
 		Protocol: protocol, From: from, To: to, Limit: limit, Offset: offset,
 	})
 	if err != nil {

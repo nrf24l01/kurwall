@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 
 	"github.com/kurwall/kurwall/internal/coordinator/domain"
@@ -417,9 +418,266 @@ func trafficWhere(q domain.TrafficQuery, flows bool) (*where, error) {
 	return w, nil
 }
 
-// buildTrafficQuery constructs the paginated union over the selected branches.
-// Filters are applied inside each branch before the union.
-func buildTrafficQuery(q domain.TrafficQuery, includeFlows, includeBlocks bool) (string, []any, error) {
+func trafficConditions(q domain.TrafficQuery) (string, []any, error) {
+	if len(q.Conditions) == 0 {
+		return "", nil, nil
+	}
+	if len(q.Conditions) > 50 {
+		return "", nil, apperr.Validation("at most 50 filter conditions are allowed")
+	}
+	match := strings.ToLower(strings.TrimSpace(q.Match))
+	if match == "" {
+		match = "all"
+	}
+	if match != "all" && match != "any" {
+		return "", nil, apperr.Validation("match must be all or any")
+	}
+	clauses := make([]string, 0, len(q.Conditions))
+	args := make([]any, 0, len(q.Conditions))
+	for index, condition := range q.Conditions {
+		expr, conditionArgs, err := trafficCondition(condition)
+		if err != nil {
+			return "", nil, apperr.Validation(fmt.Sprintf("condition %d: %v", index+1, err))
+		}
+		if condition.Negate {
+			expr = "NOT (" + expr + ")"
+		}
+		clauses = append(clauses, expr)
+		args = append(args, conditionArgs...)
+	}
+	joiner := " AND "
+	if match == "any" {
+		joiner = " OR "
+	}
+	return "(" + strings.Join(clauses, joiner) + ")", args, nil
+}
+
+func trafficCondition(condition domain.TrafficCondition) (string, []any, error) {
+	field := strings.ToLower(strings.TrimSpace(condition.Field))
+	operator := strings.ToLower(strings.TrimSpace(condition.Operator))
+	value := strings.TrimSpace(condition.Value)
+	if field == "" || operator == "" || value == "" {
+		return "", nil, fmt.Errorf("field, operator and value are required")
+	}
+
+	switch field {
+	case "event.kind":
+		kind := strings.ToLower(value)
+		if kind != "connection" && kind != "block" {
+			return "", nil, fmt.Errorf("event.kind must be connection or block")
+		}
+		return comparison("kind", operator, kind)
+	case "decision":
+		decision := strings.ToLower(value)
+		if decision != "allowed" && decision != "blocked" {
+			return "", nil, fmt.Errorf("decision must be allowed or blocked")
+		}
+		return comparison("blocked", operator, decision == "blocked")
+	case "ip.src", "src.ip":
+		return ipCondition("src_ip", operator, value)
+	case "ip.dst", "dst.ip":
+		return ipCondition("dst_ip", operator, value)
+	case "ip.addr":
+		ip, err := validIP(value)
+		if err != nil {
+			return "", nil, err
+		}
+		switch operator {
+		case "eq":
+			return "(src_ip = toIPv6(?) OR dst_ip = toIPv6(?))", []any{ip, ip}, nil
+		case "ne":
+			return "(src_ip != toIPv6(?) AND dst_ip != toIPv6(?))", []any{ip, ip}, nil
+		default:
+			return "", nil, fmt.Errorf("ip.addr supports is and is not")
+		}
+	case "src.port":
+		return numericCondition("src_port", operator, value, 16)
+	case "dst.port":
+		return numericCondition("dst_port", operator, value, 16)
+	case "port":
+		return numericEither([]string{"src_port", "dst_port"}, operator, value, 16)
+	case "protocol":
+		protocol, err := protocolNumber(value)
+		if err != nil {
+			return "", nil, err
+		}
+		return comparison("protocol", operator, protocol)
+	case "domain":
+		return stringCondition([]string{"domain", "sni", "target"}, operator, value)
+	case "sni":
+		return stringCondition([]string{"sni"}, operator, value)
+	case "target":
+		return stringCondition([]string{"target"}, operator, value)
+	case "block.kind":
+		kind := strings.ToLower(value)
+		switch kind {
+		case "ip", "cidr", "domain", "asn", "dns":
+		default:
+			return "", nil, fmt.Errorf("block.kind must be ip, cidr, domain, asn or dns")
+		}
+		return comparison("block_kind", operator, kind)
+	case "node":
+		if operator != "eq" && operator != "ne" {
+			return "", nil, fmt.Errorf("node supports is and is not")
+		}
+		return comparison("node_id", operator, value)
+	case "container":
+		return stringCondition([]string{"container_name", "container_id"}, operator, value)
+	case "bytes.out":
+		return numericCondition("bytes_out", operator, value, 64)
+	case "bytes.in":
+		return numericCondition("bytes_in", operator, value, 64)
+	case "duration":
+		return numericCondition("duration_ms", operator, value, 32)
+	case "reason":
+		return stringCondition([]string{"reason"}, operator, value)
+	default:
+		return "", nil, fmt.Errorf("unsupported field %q", condition.Field)
+	}
+}
+
+func comparison(column, operator string, value any) (string, []any, error) {
+	sqlOperator, ok := map[string]string{
+		"eq": "=", "ne": "!=", "gt": ">", "gte": ">=", "lt": "<", "lte": "<=",
+	}[operator]
+	if !ok {
+		return "", nil, fmt.Errorf("operator %q is not supported for this field", operator)
+	}
+	return fmt.Sprintf("%s %s ?", column, sqlOperator), []any{value}, nil
+}
+
+func ipCondition(column, operator, value string) (string, []any, error) {
+	ip, err := validIP(value)
+	if err != nil {
+		return "", nil, err
+	}
+	switch operator {
+	case "eq":
+		return fmt.Sprintf("%s = toIPv6(?)", column), []any{ip}, nil
+	case "ne":
+		return fmt.Sprintf("%s != toIPv6(?)", column), []any{ip}, nil
+	default:
+		return "", nil, fmt.Errorf("%s supports is and is not", column)
+	}
+}
+
+func protocolNumber(value string) (uint8, error) {
+	switch strings.ToLower(value) {
+	case "icmp":
+		return 1, nil
+	case "tcp":
+		return 6, nil
+	case "udp":
+		return 17, nil
+	case "icmpv6", "icmp6":
+		return 58, nil
+	}
+	number, err := strconv.ParseUint(value, 10, 8)
+	if err != nil {
+		return 0, fmt.Errorf("protocol must be tcp, udp, icmp, icmpv6 or a number")
+	}
+	return uint8(number), nil
+}
+
+func numericCondition(column, operator, value string, bits int) (string, []any, error) {
+	sqlOperator, ok := map[string]string{
+		"eq": "=", "ne": "!=", "gt": ">", "gte": ">=", "lt": "<", "lte": "<=",
+	}[operator]
+	if !ok {
+		return "", nil, fmt.Errorf("operator %q is not supported for this field", operator)
+	}
+	number, err := strconv.ParseUint(value, 10, bits)
+	if err != nil {
+		return "", nil, fmt.Errorf("value must be a non-negative integer")
+	}
+	var argument any
+	switch bits {
+	case 16:
+		argument = uint16(number)
+	case 32:
+		argument = uint32(number)
+	default:
+		argument = number
+	}
+	return fmt.Sprintf("%s %s ?", column, sqlOperator), []any{argument}, nil
+}
+
+func numericEither(columns []string, operator, value string, bits int) (string, []any, error) {
+	sqlOperator, ok := map[string]string{
+		"eq": "=", "ne": "!=", "gt": ">", "gte": ">=", "lt": "<", "lte": "<=",
+	}[operator]
+	if !ok {
+		return "", nil, fmt.Errorf("operator %q is not supported for this field", operator)
+	}
+	number, err := strconv.ParseUint(value, 10, bits)
+	if err != nil {
+		return "", nil, fmt.Errorf("value must be a non-negative integer")
+	}
+	var argument any
+	switch bits {
+	case 16:
+		argument = uint16(number)
+	case 32:
+		argument = uint32(number)
+	default:
+		argument = number
+	}
+	clauses := make([]string, 0, len(columns))
+	args := make([]any, 0, len(columns))
+	for _, column := range columns {
+		clauses = append(clauses, fmt.Sprintf("%s %s ?", column, sqlOperator))
+		args = append(args, argument)
+	}
+	joiner := " OR "
+	if operator == "ne" {
+		joiner = " AND "
+	}
+	return "(" + strings.Join(clauses, joiner) + ")", args, nil
+}
+
+func stringCondition(columns []string, operator, value string) (string, []any, error) {
+	orAll := true
+	switch operator {
+	case "eq":
+		orAll = true
+	case "ne":
+		orAll = false
+	case "contains":
+		orAll = true
+	case "not_contains":
+		orAll = false
+	case "starts_with", "ends_with":
+		orAll = true
+	default:
+		return "", nil, fmt.Errorf("operator %q is not supported for this field", operator)
+	}
+	clauses := make([]string, 0, len(columns))
+	args := make([]any, 0, len(columns))
+	for _, column := range columns {
+		switch operator {
+		case "eq":
+			clauses = append(clauses, fmt.Sprintf("lower(%s) = lower(?)", column))
+		case "ne":
+			clauses = append(clauses, fmt.Sprintf("lower(%s) != lower(?)", column))
+		case "contains":
+			clauses = append(clauses, fmt.Sprintf("positionCaseInsensitive(%s, ?) > 0", column))
+		case "not_contains":
+			clauses = append(clauses, fmt.Sprintf("positionCaseInsensitive(%s, ?) = 0", column))
+		case "starts_with":
+			clauses = append(clauses, fmt.Sprintf("startsWith(lower(%s), lower(?))", column))
+		case "ends_with":
+			clauses = append(clauses, fmt.Sprintf("endsWith(lower(%s), lower(?))", column))
+		}
+		args = append(args, value)
+	}
+	joiner := " OR "
+	if !orAll {
+		joiner = " AND "
+	}
+	return "(" + strings.Join(clauses, joiner) + ")", args, nil
+}
+
+func buildTrafficUnion(q domain.TrafficQuery, includeFlows, includeBlocks bool) (string, []any, error) {
 	flowWhere, err := trafficWhere(q, true)
 	if err != nil {
 		return "", nil, err
@@ -428,7 +686,6 @@ func buildTrafficQuery(q domain.TrafficQuery, includeFlows, includeBlocks bool) 
 	if err != nil {
 		return "", nil, err
 	}
-
 	union := make([]string, 0, 2)
 	args := make([]any, 0, len(flowWhere.args)+len(blockWhere.args))
 	if includeFlows {
@@ -439,10 +696,28 @@ func buildTrafficQuery(q domain.TrafficQuery, includeFlows, includeBlocks bool) 
 		union = append(union, "SELECT "+strings.Join(trafficBlockColumns, ",\n\t\t\t")+"\n\t\t\tFROM block_events"+blockWhere.sql())
 		args = append(args, blockWhere.args...)
 	}
+	return strings.Join(union, "\nUNION ALL\n"), args, nil
+}
 
+// buildTrafficQuery constructs the paginated union over the selected branches.
+// Simple filters are applied inside each branch; condition rows are applied to
+// the union output so fields such as kind and target behave uniformly.
+func buildTrafficQuery(q domain.TrafficQuery, includeFlows, includeBlocks bool) (string, []any, error) {
+	union, args, err := buildTrafficUnion(q, includeFlows, includeBlocks)
+	if err != nil {
+		return "", nil, err
+	}
+	conditions, conditionArgs, err := trafficConditions(q)
+	if err != nil {
+		return "", nil, err
+	}
+	query := "SELECT * FROM (" + union + ")"
+	if conditions != "" {
+		query += " WHERE " + conditions
+		args = append(args, conditionArgs...)
+	}
 	limit, offset := paginate(q.Limit, q.Offset)
-	query := "SELECT * FROM (" + strings.Join(union, "\nUNION ALL\n") + ")" +
-		fmt.Sprintf(" ORDER BY at DESC, event_id DESC LIMIT %d OFFSET %d", limit, offset)
+	query += fmt.Sprintf(" ORDER BY at DESC, event_id DESC LIMIT %d OFFSET %d", limit, offset)
 	return query, args, nil
 }
 
@@ -462,17 +737,37 @@ func (s *Store) Traffic(ctx context.Context, q domain.TrafficQuery) ([]domain.Tr
 	}
 
 	var total uint64
-	if includeFlows {
-		if err := s.conn.QueryRow(ctx, "SELECT count() FROM flows"+flowWhere.sql(), flowWhere.args...).Scan(&total); err != nil {
-			return nil, 0, apperr.Internal("count traffic flows", err)
+	if len(q.Conditions) > 0 {
+		union, unionArgs, err := buildTrafficUnion(q, includeFlows, includeBlocks)
+		if err != nil {
+			return nil, 0, err
 		}
-	}
-	if includeBlocks {
-		var blocks uint64
-		if err := s.conn.QueryRow(ctx, "SELECT count() FROM block_events"+blockWhere.sql(), blockWhere.args...).Scan(&blocks); err != nil {
-			return nil, 0, apperr.Internal("count traffic blocks", err)
+		conditions, conditionArgs, err := trafficConditions(q)
+		if err != nil {
+			return nil, 0, err
 		}
-		total += blocks
+		countQuery := "SELECT count() FROM (" + union + ")"
+		countArgs := append([]any{}, unionArgs...)
+		if conditions != "" {
+			countQuery += " WHERE " + conditions
+			countArgs = append(countArgs, conditionArgs...)
+		}
+		if err := s.conn.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+			return nil, 0, apperr.Internal("count traffic events", err)
+		}
+	} else {
+		if includeFlows {
+			if err := s.conn.QueryRow(ctx, "SELECT count() FROM flows"+flowWhere.sql(), flowWhere.args...).Scan(&total); err != nil {
+				return nil, 0, apperr.Internal("count traffic flows", err)
+			}
+		}
+		if includeBlocks {
+			var blocks uint64
+			if err := s.conn.QueryRow(ctx, "SELECT count() FROM block_events"+blockWhere.sql(), blockWhere.args...).Scan(&blocks); err != nil {
+				return nil, 0, apperr.Internal("count traffic blocks", err)
+			}
+			total += blocks
+		}
 	}
 
 	limit, _ := paginate(q.Limit, q.Offset)

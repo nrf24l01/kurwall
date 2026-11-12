@@ -198,6 +198,14 @@ type TrafficEvent struct {
 	DstCountry    string    `json:"dstCountry,omitempty"`
 }
 
+// TrafficCondition is one Wireshark-style filter row.
+type TrafficCondition struct {
+	Field    string `json:"field"`
+	Operator string `json:"operator"`
+	Value    string `json:"value"`
+	Negate   bool   `json:"negate"`
+}
+
 // TrafficQuery filters the unified traffic history.
 type TrafficQuery struct {
 	NodeID       string
@@ -208,6 +216,8 @@ type TrafficQuery struct {
 	Container    string
 	Decision     string
 	ExcludeLocal bool
+	Match        string
+	Conditions   []TrafficCondition
 	Protocol     *uint8
 	From         time.Time
 	To           time.Time
