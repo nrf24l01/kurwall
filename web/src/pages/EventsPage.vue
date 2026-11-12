@@ -5,13 +5,12 @@ import PageHead from '@/components/console/PageHead.vue'
 import StatusMark from '@/components/console/StatusMark.vue'
 import { api, errorMessage, type BlockEvent, type DnsEvent, type Flow, type Node, type Page, type TrafficEvent } from '@/lib/api'
 import { liveBlocks, liveConnected, liveDns, liveFlows } from '@/lib/live'
-import { countryFlag, formatBytes, formatDuration, formatNumber, formatTime, protocolName, rangeWindow } from '@/lib/utils'
+import { countryFlag, formatBytes, formatDuration, formatNumber, formatTime, protocolName } from '@/lib/utils'
 import { useRefresh } from '@/lib/ui'
 
 type Tab = 'traffic' | 'dns'
 
 const tab = ref<Tab>('traffic')
-const range = ref('1h')
 const nodeId = ref('all')
 const search = ref('')
 const container = ref('')
@@ -23,6 +22,23 @@ const offset = ref(0)
 const loadingMore = ref(false)
 const live = ref(true)
 
+function toLocalInput(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+const now = new Date()
+const fromInput = ref(toLocalInput(new Date(now.getTime() - 3600 * 1000)))
+const toInput = ref(toLocalInput(now))
+const activeFrom = ref('')
+const activeTo = ref('')
+
+function defaultWindow() {
+  const to = new Date()
+  fromInput.value = toLocalInput(new Date(to.getTime() - 3600 * 1000))
+  toInput.value = toLocalInput(to)
+}
+
 const nodes = ref<Node[]>([])
 const traffic = ref<Page<TrafficEvent> | null>(null)
 const dns = ref<Page<DnsEvent> | null>(null)
@@ -33,11 +49,6 @@ const detailOpen = ref(false)
 const detailTitle = ref('')
 const detailFields = ref<{ label: string; value: string }[]>([])
 
-const ranges = [
-  { value: '1h', label: '1 h' },
-  { value: '24h', label: '24 h' },
-  { value: '7d', label: '7 d' },
-]
 const tabs: { value: Tab; label: string }[] = [
   { value: 'traffic', label: 'Traffic' },
   { value: 'dns', label: 'DNS' },
@@ -51,8 +62,12 @@ const hasMore = computed(() => {
   return Boolean(current && current.items.length < current.total)
 })
 const tabLabel = computed(() => tabs.find((item) => item.value === tab.value)?.label ?? '')
-const subtitle = computed(() => `${formatNumber(total.value)} ${tabLabel.value.toLowerCase()} · ${rangeLabel.value}`)
-const rangeLabel = computed(() => ranges.find((item) => item.value === range.value)?.label ?? '')
+const subtitle = computed(() => `${formatNumber(total.value)} ${tabLabel.value.toLowerCase()} · ${windowLabel.value}`)
+const windowLabel = computed(() => {
+  const from = fromInput.value.replace('T', ' ')
+  const to = toInput.value.replace('T', ' ')
+  return from && to ? `${from} → ${to}` : 'custom range'
+})
 const noFilters = computed(
   () =>
     nodeId.value === 'all' &&
@@ -124,14 +139,27 @@ async function load() {
   offset.value = 0
   loading.value = true
   error.value = ''
-  const window = rangeWindow(range.value)
+  const fromDate = fromInput.value ? new Date(fromInput.value) : null
+  const toDate = toInput.value ? new Date(toInput.value) : new Date()
+  if ((fromDate && Number.isNaN(fromDate.getTime())) || Number.isNaN(toDate.getTime())) {
+    error.value = 'From and To must be valid date/times.'
+    loading.value = false
+    return
+  }
+  if (fromDate && fromDate >= toDate) {
+    error.value = 'From must be before To.'
+    loading.value = false
+    return
+  }
+  activeFrom.value = fromDate ? fromDate.toISOString() : ''
+  activeTo.value = toDate.toISOString()
   const common = {
     nodeId: nodeId.value === 'all' ? undefined : nodeId.value,
     container: container.value || undefined,
     limit,
     offset: offset.value,
-    from: window.from,
-    to: window.to,
+    from: activeFrom.value || undefined,
+    to: activeTo.value,
   }
   try {
     if (tab.value === 'traffic') {
@@ -164,13 +192,12 @@ async function loadMore() {
   if (!active || active.items.length >= active.total) return
   loadingMore.value = true
   error.value = ''
-  const window = rangeWindow(range.value)
   const common = {
     nodeId: nodeId.value === 'all' ? undefined : nodeId.value,
     container: container.value || undefined,
     limit,
-    from: window.from,
-    to: window.to,
+    from: activeFrom.value || undefined,
+    to: activeTo.value,
   }
   try {
     if (tab.value === 'traffic') {
@@ -321,7 +348,7 @@ function resetFilters() {
   filter.value = 'all'
   excludeLocal.value = false
   nodeId.value = 'all'
-  range.value = '1h'
+  defaultWindow()
   offset.value = 0
   load()
 }
@@ -396,7 +423,7 @@ function showDNS(event: DnsEvent) {
   ])
 }
 
-watch([range, nodeId, filter, excludeLocal], () => {
+watch([nodeId, filter, excludeLocal], () => {
   offset.value = 0
   load()
 })
@@ -437,18 +464,6 @@ onBeforeUnmount(() => {
   <div class="page">
     <PageHead title="Events" :subtitle="subtitle">
       <template #actions>
-        <div class="seg-row">
-          <button
-            v-for="option in ranges"
-            :key="option.value"
-            class="pc-sb"
-            type="button"
-            :aria-pressed="range === option.value"
-            @click="range = option.value"
-          >
-            {{ option.label }}
-          </button>
-        </div>
         <button class="pc-btn pc-sm" type="button" :disabled="loading" @click="load">Refresh</button>
       </template>
     </PageHead>
@@ -481,6 +496,12 @@ onBeforeUnmount(() => {
           <option value="all">All nodes</option>
           <option v-for="node in nodes" :key="node.id" :value="node.id">{{ node.name }}</option>
         </select>
+      </div>
+      <div style="width: 210px">
+        <input v-model="fromInput" class="pc-inp" type="datetime-local" aria-label="From date and time" title="From" @change="applyFilters" />
+      </div>
+      <div style="width: 210px">
+        <input v-model="toInput" class="pc-inp" type="datetime-local" aria-label="To date and time" title="To" @change="applyFilters" />
       </div>
       <div class="grow">
         <input v-model="search" class="pc-inp" :placeholder="tab === 'traffic' ? 'Domain / target' : 'Domain'" type="search" />
@@ -518,7 +539,7 @@ onBeforeUnmount(() => {
       <section class="area">
         <div class="pc-title">
           <h2>{{ tabLabel }}</h2>
-          <span class="area-title-note">{{ formatNumber(total) }} matching · {{ rangeLabel }}</span>
+          <span class="area-title-note">{{ formatNumber(total) }} matching</span>
         </div>
         <div class="area-body flush">
           <div class="tbl tbl-wide">
