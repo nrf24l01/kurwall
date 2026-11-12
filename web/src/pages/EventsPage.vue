@@ -3,8 +3,8 @@ import { computed, onMounted, ref, watch } from 'vue'
 import ConsoleDialog from '@/components/console/ConsoleDialog.vue'
 import PageHead from '@/components/console/PageHead.vue'
 import StatusMark from '@/components/console/StatusMark.vue'
-import { api, errorMessage, type DnsEvent, type Node, type Page, type TrafficEvent } from '@/lib/api'
-import { liveConnected, liveDns } from '@/lib/live'
+import { api, errorMessage, type BlockEvent, type DnsEvent, type Flow, type Node, type Page, type TrafficEvent } from '@/lib/api'
+import { liveBlocks, liveConnected, liveDns, liveFlows } from '@/lib/live'
 import { countryFlag, formatBytes, formatDuration, formatNumber, formatTime, protocolName, rangeWindow } from '@/lib/utils'
 import { useRefresh } from '@/lib/ui'
 
@@ -137,6 +137,77 @@ watch(liveDns, (items, previous) => {
   const add = incoming.filter((item) => !existing.has(item.eventId))
   if (add.length === 0) return
   dns.value = { ...dns.value, items: [...add, ...dns.value.items].slice(0, limit), total: dns.value.total + add.length }
+})
+
+function flowToTraffic(flow: Flow): TrafficEvent {
+  return {
+    kind: 'connection',
+    eventId: flow.eventId,
+    nodeId: flow.nodeId,
+    at: flow.startedAt,
+    endedAt: flow.endedAt,
+    durationMs: flow.durationMs,
+    srcIp: flow.srcIp,
+    srcPort: flow.srcPort,
+    dstIp: flow.dstIp,
+    dstPort: flow.dstPort,
+    protocol: flow.protocol,
+    domain: flow.domain,
+    sni: flow.sni,
+    containerId: flow.containerId,
+    containerName: flow.containerName,
+    bytesIn: flow.bytesIn,
+    bytesOut: flow.bytesOut,
+    packetsIn: flow.packetsIn,
+    packetsOut: flow.packetsOut,
+    blocked: flow.blocked,
+    ruleId: flow.ruleId,
+    reason: flow.reason,
+    dstAsn: flow.dstAsn,
+    dstCountry: flow.dstCountry,
+  }
+}
+
+function blockToTraffic(block: BlockEvent): TrafficEvent {
+  return {
+    kind: 'block',
+    eventId: block.eventId,
+    nodeId: block.nodeId,
+    at: block.at,
+    srcIp: block.srcIp,
+    srcPort: block.srcPort,
+    dstIp: block.dstIp,
+    dstPort: block.dstPort,
+    protocol: block.protocol,
+    domain: block.domain,
+    target: block.target,
+    blockKind: block.kind,
+    containerId: block.containerId,
+    containerName: block.containerName,
+    blocked: true,
+    ruleId: block.ruleId,
+    reason: block.reason,
+    dstAsn: block.dstAsn,
+    dstCountry: block.dstCountry,
+  }
+}
+
+watch([liveFlows, liveBlocks], () => {
+  const current = traffic.value
+  if (!live.value || tab.value !== 'traffic' || offset.value !== 0 || !noFilters.value || !current) return
+  const rows = [
+    ...liveFlows.value.filter((flow) => !flow.blocked).map(flowToTraffic),
+    ...liveBlocks.value.map(blockToTraffic),
+  ].sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+  const existing = new Set(current.items.map((item) => item.eventId))
+  const add: TrafficEvent[] = []
+  for (const row of rows) {
+    if (existing.has(row.eventId)) continue
+    existing.add(row.eventId)
+    add.push(row)
+  }
+  if (add.length === 0) return
+  traffic.value = { ...current, items: [...add, ...current.items].slice(0, limit), total: current.total + add.length }
 })
 
 function applyFilters() {
