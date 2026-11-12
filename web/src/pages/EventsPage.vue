@@ -182,12 +182,12 @@ function showTraffic(event: TrafficEvent) {
     { label: 'Domain / SNI', value: [event.domain, event.sni].filter(Boolean).join(' · ') || '—' },
     { label: 'Container', value: event.containerName || event.containerId || '—' },
   ]
-  fields.push(
-    { label: 'Bytes', value: `${formatBytes(event.bytesOut ?? 0)} out / ${formatBytes(event.bytesIn ?? 0)} in` },
-    { label: 'Packets', value: `${formatNumber(event.packetsOut ?? 0)} out / ${formatNumber(event.packetsIn ?? 0)} in` },
-  )
   if (event.kind === 'connection') {
-    fields.push({ label: 'Duration', value: formatDuration(event.durationMs ?? 0) })
+    fields.push(
+      { label: 'Bytes', value: `${formatBytes(event.bytesOut ?? 0)} out / ${formatBytes(event.bytesIn ?? 0)} in` },
+      { label: 'Packets', value: `${formatNumber(event.packetsOut ?? 0)} out / ${formatNumber(event.packetsIn ?? 0)} in` },
+      { label: 'Duration', value: formatDuration(event.durationMs ?? 0) },
+    )
   }
   const asn = event.dstAsn ? `AS${event.dstAsn}` : ''
   const country = event.dstCountry ? `${countryFlag(event.dstCountry)} ${event.dstCountry}`.trim() : ''
