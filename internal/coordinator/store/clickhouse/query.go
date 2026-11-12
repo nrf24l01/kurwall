@@ -266,6 +266,148 @@ func (s *Store) Blocks(ctx context.Context, q domain.BlockQuery) ([]domain.Block
 	return out, total, rows.Err()
 }
 
+// trafficBranches reports which storage tables a decision filter includes.
+func trafficBranches(decision string) (flows, blocks bool) {
+	switch decision {
+	case "allowed":
+		return true, false
+	case "blocked":
+		return false, true
+	default:
+		return true, true
+	}
+}
+
+// trafficWhere builds the filters shared by the traffic counts and branches.
+func trafficWhere(q domain.TrafficQuery, flows bool) (*where, error) {
+	w := &where{}
+	if flows {
+		w.add("flows.blocked = 0")
+		w.add("started_at >= ?", q.From)
+		w.add("started_at <= ?", q.To)
+	} else {
+		w.add("at >= ?", q.From)
+		w.add("at <= ?", q.To)
+	}
+	if q.NodeID != "" {
+		w.add("node_id = ?", q.NodeID)
+	}
+	if q.Protocol != nil {
+		w.add("protocol = ?", *q.Protocol)
+	}
+	if q.Container != "" {
+		w.add("(positionCaseInsensitive(container_name, ?) > 0 OR positionCaseInsensitive(container_id, ?) > 0)", q.Container, q.Container)
+	}
+	if q.SrcIP != "" {
+		ip, err := validIP(q.SrcIP)
+		if err != nil {
+			return nil, err
+		}
+		w.add("src_ip = toIPv6(?)", ip)
+	}
+	if q.DstIP != "" {
+		ip, err := validIP(q.DstIP)
+		if err != nil {
+			return nil, err
+		}
+		w.add("dst_ip = toIPv6(?)", ip)
+	}
+	if q.IP != "" {
+		ip, err := validIP(q.IP)
+		if err != nil {
+			return nil, err
+		}
+		w.add("(src_ip = toIPv6(?) OR dst_ip = toIPv6(?))", ip, ip)
+	}
+	if q.Domain != "" {
+		if flows {
+			w.add("(positionCaseInsensitive(domain, ?) > 0 OR positionCaseInsensitive(sni, ?) > 0)", q.Domain, q.Domain)
+		} else {
+			w.add("(positionCaseInsensitive(domain, ?) > 0 OR positionCaseInsensitive(target, ?) > 0)", q.Domain, q.Domain)
+		}
+	}
+	return w, nil
+}
+
+// Traffic returns allowed connections and blocking decisions in one feed.
+func (s *Store) Traffic(ctx context.Context, q domain.TrafficQuery) ([]domain.TrafficEvent, uint64, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+
+	includeFlows, includeBlocks := trafficBranches(q.Decision)
+	flowWhere, err := trafficWhere(q, true)
+	if err != nil {
+		return nil, 0, err
+	}
+	blockWhere, err := trafficWhere(q, false)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var total uint64
+	if includeFlows {
+		if err := s.conn.QueryRow(ctx, "SELECT count() FROM flows"+flowWhere.sql(), flowWhere.args...).Scan(&total); err != nil {
+			return nil, 0, apperr.Internal("count traffic flows", err)
+		}
+	}
+	if includeBlocks {
+		var blocks uint64
+		if err := s.conn.QueryRow(ctx, "SELECT count() FROM block_events"+blockWhere.sql(), blockWhere.args...).Scan(&blocks); err != nil {
+			return nil, 0, apperr.Internal("count traffic blocks", err)
+		}
+		total += blocks
+	}
+
+	limit, offset := paginate(q.Limit, q.Offset)
+	union := make([]string, 0, 2)
+	args := make([]any, 0, len(flowWhere.args)+len(blockWhere.args))
+	if includeFlows {
+		union = append(union, `SELECT event_id, 'connection' AS kind, node_id, started_at AS at, ended_at,
+			duration_ms, src_ip, dst_ip, src_port, dst_port, protocol,
+			domain, sni, '' AS target, '' AS block_kind,
+			container_id, container_name, toUInt64(bytes_in) AS bytes_in, toUInt64(bytes_out) AS bytes_out,
+			toUInt64(packets_in) AS packets_in, toUInt64(packets_out) AS packets_out,
+			false AS blocked, rule_id, reason
+			FROM flows`+flowWhere.sql())
+		args = append(args, flowWhere.args...)
+	}
+	if includeBlocks {
+		union = append(union, `SELECT event_id, 'block' AS kind, node_id, block_events.at AS at, block_events.at AS ended_at,
+			toUInt32(0) AS duration_ms, src_ip, dst_ip, src_port, dst_port, protocol,
+			domain, '' AS sni, target, block_events.kind AS block_kind,
+			container_id, container_name, toUInt64(0) AS bytes_in, toUInt64(0) AS bytes_out,
+			toUInt64(0) AS packets_in, toUInt64(0) AS packets_out,
+			true AS blocked, rule_id, reason
+			FROM block_events`+blockWhere.sql())
+		args = append(args, blockWhere.args...)
+	}
+
+	query := "SELECT * FROM (" + strings.Join(union, "\nUNION ALL\n") + ")" +
+		fmt.Sprintf(" ORDER BY at DESC, event_id DESC LIMIT %d OFFSET %d", limit, offset)
+	rows, err := s.conn.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, apperr.Internal("query traffic events", err)
+	}
+	defer rows.Close()
+
+	out := make([]domain.TrafficEvent, 0, limit)
+	for rows.Next() {
+		var e domain.TrafficEvent
+		var src, dst net.IP
+		if err := rows.Scan(&e.EventID, &e.Kind, &e.NodeID, &e.At, &e.EndedAt, &e.DurationMS,
+			&src, &dst, &e.SrcPort, &e.DstPort, &e.Protocol, &e.Domain, &e.SNI,
+			&e.Target, &e.BlockKind, &e.ContainerID, &e.ContainerName,
+			&e.BytesIn, &e.BytesOut, &e.PacketsIn, &e.PacketsOut,
+			&e.Blocked, &e.RuleID, &e.Reason); err != nil {
+			return nil, 0, apperr.Internal("scan traffic event", err)
+		}
+		e.SrcIP = formatRawIP(src)
+		e.DstIP = formatRawIP(dst)
+		out = append(out, e)
+	}
+	return out, total, rows.Err()
+}
+
 func formatRawIP(ip net.IP) string {
 	return FormatIP(ip)
 }

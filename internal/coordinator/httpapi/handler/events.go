@@ -112,6 +112,43 @@ func (h *Handler) ListBlocks(c echo.Context) error {
 	return response.OK(c, page)
 }
 
+// ListTraffic returns allowed connections and blocking decisions in one feed.
+func (h *Handler) ListTraffic(c echo.Context) error {
+	from, err := queryTime(c, "from")
+	if err != nil {
+		return response.Error(c, err)
+	}
+	to, err := queryTime(c, "to")
+	if err != nil {
+		return response.Error(c, err)
+	}
+	limit, err := queryInt(c, "limit", 50)
+	if err != nil {
+		return response.Error(c, err)
+	}
+	offset, err := queryInt(c, "offset", 0)
+	if err != nil {
+		return response.Error(c, err)
+	}
+	protocol, err := queryUint8(c, "protocol")
+	if err != nil {
+		return response.Error(c, err)
+	}
+	decision := c.QueryParam("decision")
+	if decision != "" && decision != "allowed" && decision != "blocked" {
+		return response.Error(c, apperr.Validation("decision must be allowed or blocked"))
+	}
+	page, err := h.Events.Traffic(c.Request().Context(), domain.TrafficQuery{
+		NodeID: c.QueryParam("nodeId"), SrcIP: c.QueryParam("srcIp"), DstIP: c.QueryParam("dstIp"),
+		IP: c.QueryParam("ip"), Domain: c.QueryParam("domain"), Container: c.QueryParam("container"),
+		Decision: decision, Protocol: protocol, From: from, To: to, Limit: limit, Offset: offset,
+	})
+	if err != nil {
+		return response.Error(c, err)
+	}
+	return response.OK(c, page)
+}
+
 // Stats returns the dashboard overview.
 func (h *Handler) Stats(c echo.Context) error {
 	from, err := queryTime(c, "from")

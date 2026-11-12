@@ -313,6 +313,67 @@ func (s *Events) Blocks(ctx context.Context, q domain.BlockQuery) (domain.Page[d
 	return domain.Page[domain.BlockRecord]{Items: items, Total: total, Limit: pageLimit(q.Limit), Offset: q.Offset}, nil
 }
 
+// Traffic returns allowed connections and blocking decisions in one feed.
+func (s *Events) Traffic(ctx context.Context, q domain.TrafficQuery) (domain.Page[domain.TrafficEvent], error) {
+	from, to, err := normalizeWindow(q.From, q.To, time.Hour)
+	if err != nil {
+		return domain.Page[domain.TrafficEvent]{}, err
+	}
+	q.From, q.To = from, to
+	items, total, err := s.reader.Traffic(ctx, q)
+	if err != nil {
+		return domain.Page[domain.TrafficEvent]{}, err
+	}
+	dstIPs := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.DstIP != "" {
+			dstIPs = append(dstIPs, item.DstIP)
+		}
+	}
+	info := s.asnInfo(ctx, dstIPs)
+	for i := range items {
+		if asn, ok := info[items[i].DstIP]; ok {
+			items[i].DstASN = asn.ASN
+			items[i].DstCountry = asn.Country
+		}
+	}
+	return domain.Page[domain.TrafficEvent]{Items: items, Total: total, Limit: pageLimit(q.Limit), Offset: q.Offset}, nil
+}
+
+// asnInfo resolves ASN data for the unique, normalized IPs in one lookup.
+// Lookup failures are ignored so event reads stay available without ASN data.
+func (s *Events) asnInfo(ctx context.Context, ips []string) map[string]domain.ASNInfo {
+	out := make(map[string]domain.ASNInfo)
+	if s.repo == nil || len(ips) == 0 {
+		return out
+	}
+	seen := make(map[string]struct{}, len(ips))
+	unique := make([]string, 0, len(ips))
+	for _, raw := range ips {
+		addr, err := netip.ParseAddr(strings.TrimSpace(raw))
+		if err != nil {
+			continue
+		}
+		ip := addr.Unmap().String()
+		if _, ok := seen[ip]; ok {
+			continue
+		}
+		seen[ip] = struct{}{}
+		unique = append(unique, ip)
+	}
+	if len(unique) == 0 {
+		return out
+	}
+	info, err := s.repo.LookupASNForIPs(ctx, unique)
+	if err != nil {
+		return out
+	}
+	if info == nil {
+		return out
+	}
+	return info
+}
+
 // Stats aggregates dashboard counters.
 func (s *Events) Stats(ctx context.Context, from, to time.Time) (domain.Stats, error) {
 	from, to, err := normalizeWindow(from, to, 24*time.Hour)

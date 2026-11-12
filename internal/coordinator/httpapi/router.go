@@ -100,6 +100,7 @@ func New(d Deps) *echo.Echo {
 	api.GET("/events/flows", h.ListFlows)
 	api.GET("/events/dns", h.ListDNS)
 	api.GET("/events/blocks", h.ListBlocks)
+	api.GET("/events/traffic", h.ListTraffic)
 	api.GET("/stats/overview", h.Stats)
 	api.POST("/stream-ticket", h.StreamTicket)
 	api.GET("/asns", h.ListASNs)

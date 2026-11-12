@@ -74,6 +74,7 @@ type EventReader interface {
 	Flows(ctx context.Context, f FlowQuery) ([]FlowRecord, uint64, error)
 	DNS(ctx context.Context, f DNSQuery) ([]DNSRecord, uint64, error)
 	Blocks(ctx context.Context, f BlockQuery) ([]BlockRecord, uint64, error)
+	Traffic(ctx context.Context, f TrafficQuery) ([]TrafficEvent, uint64, error)
 	Stats(ctx context.Context, from, to time.Time) (Stats, error)
 	Health(ctx context.Context) error
 }
@@ -154,6 +155,53 @@ type BlockRecord struct {
 	ContainerName string    `json:"containerName"`
 	RuleID        string    `json:"ruleId"`
 	Reason        string    `json:"reason"`
+}
+
+// TrafficEvent is one allowed connection or one blocking decision in the
+// unified traffic view.
+type TrafficEvent struct {
+	Kind          string    `json:"kind"`
+	EventID       string    `json:"eventId"`
+	NodeID        string    `json:"nodeId"`
+	At            time.Time `json:"at"`
+	EndedAt       time.Time `json:"endedAt"`
+	DurationMS    uint32    `json:"durationMs"`
+	SrcIP         string    `json:"srcIp"`
+	DstIP         string    `json:"dstIp"`
+	SrcPort       uint16    `json:"srcPort"`
+	DstPort       uint16    `json:"dstPort"`
+	Protocol      uint8     `json:"protocol"`
+	Domain        string    `json:"domain"`
+	SNI           string    `json:"sni"`
+	Target        string    `json:"target"`
+	BlockKind     string    `json:"blockKind"`
+	ContainerID   string    `json:"containerId"`
+	ContainerName string    `json:"containerName"`
+	BytesIn       uint64    `json:"bytesIn"`
+	BytesOut      uint64    `json:"bytesOut"`
+	PacketsIn     uint64    `json:"packetsIn"`
+	PacketsOut    uint64    `json:"packetsOut"`
+	Blocked       bool      `json:"blocked"`
+	RuleID        string    `json:"ruleId"`
+	Reason        string    `json:"reason"`
+	DstASN        int64     `json:"dstAsn,omitempty"`
+	DstCountry    string    `json:"dstCountry,omitempty"`
+}
+
+// TrafficQuery filters the unified traffic history.
+type TrafficQuery struct {
+	NodeID    string
+	SrcIP     string
+	DstIP     string
+	IP        string
+	Domain    string
+	Container string
+	Decision  string
+	Protocol  *uint8
+	From      time.Time
+	To        time.Time
+	Limit     int
+	Offset    int
 }
 
 // FlowQuery filters connection history.
