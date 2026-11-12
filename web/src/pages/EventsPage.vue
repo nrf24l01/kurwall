@@ -160,7 +160,7 @@ function flowToTraffic(flow: Flow): TrafficEvent {
     bytesOut: flow.bytesOut,
     packetsIn: flow.packetsIn,
     packetsOut: flow.packetsOut,
-    blocked: flow.blocked,
+    blocked: false,
     ruleId: flow.ruleId,
     reason: flow.reason,
     dstAsn: flow.dstAsn,
@@ -192,12 +192,16 @@ function blockToTraffic(block: BlockEvent): TrafficEvent {
   }
 }
 
-watch([liveFlows, liveBlocks], () => {
+watch([liveFlows, liveBlocks], ([flows, blocks], [prevFlows, prevBlocks]) => {
   const current = traffic.value
   if (!live.value || tab.value !== 'traffic' || offset.value !== 0 || !noFilters.value || !current) return
+  // Diff against the previous buffer so rows that already fell off the capped
+  // table are never replayed; only genuinely new live events are prepended.
+  const seenFlows = new Set((prevFlows ?? []).map((flow) => flow.eventId))
+  const seenBlocks = new Set((prevBlocks ?? []).map((block) => block.eventId))
   const rows = [
-    ...liveFlows.value.filter((flow) => !flow.blocked).map(flowToTraffic),
-    ...liveBlocks.value.map(blockToTraffic),
+    ...flows.filter((flow) => !flow.blocked && !seenFlows.has(flow.eventId)).map(flowToTraffic),
+    ...blocks.filter((block) => !seenBlocks.has(block.eventId)).map(blockToTraffic),
   ].sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
   const existing = new Set(current.items.map((item) => item.eventId))
   const add: TrafficEvent[] = []
