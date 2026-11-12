@@ -73,7 +73,7 @@ const operatorSymbols: Record<string, string> = {
   eq: '==',
   ne: '!=',
   contains: 'contains',
-  not_contains: '!contains',
+  not_contains: 'not contains',
   starts_with: 'starts_with',
   ends_with: 'ends_with',
   gt: '>',

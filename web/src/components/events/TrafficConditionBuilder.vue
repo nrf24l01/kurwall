@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { TrafficCondition, TrafficMatch } from '@/lib/api'
 import {
   defaultCondition,
@@ -12,10 +12,14 @@ import {
 const conditions = defineModel<TrafficCondition[]>('conditions', { required: true })
 const match = defineModel<TrafficMatch>('match', { required: true })
 
+const draft = ref('')
+const error = ref('')
+
 const complete = computed(() =>
   conditions.value.filter((condition) => condition.field && condition.operator && condition.value.trim()),
 )
 const expression = computed(() => expressionFor(complete.value, match.value))
+watch(expression, (value) => { draft.value = value }, { immediate: true })
 
 function addCondition() {
   conditions.value = [...conditions.value, defaultCondition()]
@@ -31,18 +35,116 @@ function changeField(condition: TrafficCondition, field: string) {
   condition.operator = def?.operators[0] ?? 'eq'
   condition.value = def?.type === 'select' ? (def.options?.[0]?.value ?? '') : ''
 }
+
+function splitExpression(raw: string): { terms: string[]; connector: '' | '&&' | '||' } {
+  const terms: string[] = []
+  let current = ''
+  let quote = ''
+  let connector: '' | '&&' | '||' = ''
+  for (let index = 0; index < raw.length; index++) {
+    const char = raw[index]
+    if (quote) {
+      current += char
+      if (char === quote) quote = ''
+      continue
+    }
+    if (char === '"' || char === "'") {
+      quote = char
+      current += char
+      continue
+    }
+    const pair = raw.slice(index, index + 2)
+    if (pair === '&&' || pair === '||') {
+      if (connector && connector !== pair) {
+        throw new Error('Mixed && and || is not supported; use condition rows for mixed logic.')
+      }
+      connector = pair
+      if (current.trim()) terms.push(current.trim())
+      current = ''
+      index++
+      continue
+    }
+    current += char
+  }
+  if (current.trim()) terms.push(current.trim())
+  return { terms, connector }
+}
+
+function parseValue(raw: string): string {
+  const value = raw.trim()
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1).replace(/\\(["'\\])/g, '$1')
+  }
+  return value
+}
+
+function applyExpression() {
+  error.value = ''
+  const raw = draft.value.trim()
+  if (!raw) {
+    conditions.value = []
+    match.value = 'all'
+    return
+  }
+  try {
+    const { terms, connector } = splitExpression(raw)
+    const pattern = /^(!)?\s*([a-zA-Z0-9.]+)\s*(==|!=|>=|<=|>|<|not\s+contains|contains|starts_with|starts\s+with|ends_with|ends\s+with)\s*(.+)$/
+    const parsed: TrafficCondition[] = []
+    for (const term of terms) {
+      const matchResult = term.match(pattern)
+      if (!matchResult) throw new Error(`Cannot parse condition: ${term}`)
+      const negate = Boolean(matchResult[1])
+      const field = matchResult[2].toLowerCase()
+      const def = fieldDefinition(field)
+      if (!def) throw new Error(`Unknown field: ${field}`)
+      const rawOperator = matchResult[3].toLowerCase().replace(/\s+/g, ' ')
+      const operator =
+        rawOperator === '==' ? 'eq' :
+        rawOperator === '!=' ? 'ne' :
+        rawOperator === '>=' ? 'gte' :
+        rawOperator === '<=' ? 'lte' :
+        rawOperator === '>' ? 'gt' :
+        rawOperator === '<' ? 'lt' :
+        rawOperator === 'contains' ? 'contains' :
+        rawOperator === 'not contains' ? 'not_contains' :
+        rawOperator === 'starts with' || rawOperator === 'starts_with' ? 'starts_with' :
+        rawOperator === 'ends with' || rawOperator === 'ends_with' ? 'ends_with' : ''
+      if (!operator || !def.operators.includes(operator)) {
+        throw new Error(`Operator ${rawOperator} is not supported for ${field}`)
+      }
+      let value = parseValue(matchResult[4])
+      if (def.type === 'select') value = value.toLowerCase()
+      if (!value) throw new Error(`Value is required for ${field}`)
+      parsed.push({ field, operator, value, negate })
+    }
+    conditions.value = parsed
+    match.value = connector === '||' ? 'any' : 'all'
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'Cannot parse the filter'
+  }
+}
 </script>
 
 <template>
   <div class="filter-builder">
     <div class="filter-builder-head">
-      <span class="filter-expr mono">{{ expression || 'No conditions' }}</span>
+      <label class="filter-label" for="wireshark-filter">Wireshark filter</label>
+      <input
+        id="wireshark-filter"
+        v-model="draft"
+        class="pc-inp filter-input mono"
+        placeholder='ip.dst == 8.8.8.8 && !domain contains "ads"'
+        aria-label="Wireshark filter expression"
+        @keydown.enter.prevent="applyExpression"
+      />
+      <button class="pc-btn pc-sm" type="button" @click="applyExpression">Apply</button>
       <select v-model="match" class="pc-inp filter-match" aria-label="Match mode">
         <option value="all">Match all (AND)</option>
         <option value="any">Match any (OR)</option>
       </select>
       <button class="pc-btn pc-sm" type="button" @click="addCondition">Add condition</button>
     </div>
+    <p v-if="error" class="err">{{ error }}</p>
     <div v-if="conditions.length === 0" class="filter-empty">
       Add a condition to filter by IP, port, protocol, domain, decision, block kind or size. Use
       “Text (any field)” to search domain, target, reason and container together.
