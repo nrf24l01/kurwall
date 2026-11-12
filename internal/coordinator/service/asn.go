@@ -186,7 +186,7 @@ func (s *ASN) refreshCatalog(ctx context.Context) {
 	ranges := make([]domain.ASNRange, 0, len(result.Ranges))
 	for _, r := range result.Ranges {
 		ranges = append(ranges, domain.ASNRange{
-			StartIP: r.Start.String(), EndIP: r.End.String(),
+			StartIP: r.Start, EndIP: r.End,
 			ASN: r.ASN, Country: r.Country, Name: r.Name,
 		})
 	}

@@ -36,19 +36,7 @@ func (s *Store) ReplaceASNCatalog(ctx context.Context, entries []domain.ASNEntry
 		return apperr.Internal("copy asn catalog", err)
 	}
 	if len(ranges) > 0 {
-		rows = make([][]any, 0, len(ranges))
-		for _, r := range ranges {
-			start, err := netip.ParseAddr(r.StartIP)
-			if err != nil {
-				return fmt.Errorf("invalid ASN range start %q: %w", r.StartIP, err)
-			}
-			end, err := netip.ParseAddr(r.EndIP)
-			if err != nil {
-				return fmt.Errorf("invalid ASN range end %q: %w", r.EndIP, err)
-			}
-			rows = append(rows, []any{start, end, r.ASN, r.Country, r.Name})
-		}
-		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"asn_ranges"}, []string{"start_ip", "end_ip", "asn", "country", "name"}, pgx.CopyFromRows(rows)); err != nil {
+		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"asn_ranges"}, []string{"start_ip", "end_ip", "asn", "country", "name"}, &asnRangeSource{ranges: ranges}); err != nil {
 			return apperr.Internal("copy asn ranges", err)
 		}
 	}
@@ -57,6 +45,33 @@ func (s *Store) ReplaceASNCatalog(ctx context.Context, entries []domain.ASNEntry
 	}
 	return nil
 }
+
+// asnRangeSource streams catalog ranges into pgx's binary COPY, avoiding a
+// second full [][]any copy of the range set.
+type asnRangeSource struct {
+	ranges []domain.ASNRange
+	index  int
+	err    error
+}
+
+func (s *asnRangeSource) Next() bool {
+	if s.err != nil || s.index >= len(s.ranges) {
+		return false
+	}
+	s.index++
+	return true
+}
+
+func (s *asnRangeSource) Values() ([]any, error) {
+	r := s.ranges[s.index-1]
+	if !r.StartIP.IsValid() || !r.EndIP.IsValid() {
+		s.err = fmt.Errorf("invalid ASN range addresses for AS%d", r.ASN)
+		return nil, s.err
+	}
+	return []any{r.StartIP, r.EndIP, r.ASN, r.Country, r.Name}, nil
+}
+
+func (s *asnRangeSource) Err() error { return s.err }
 
 // CountASNRanges returns the number of rows in the address range table.
 func (s *Store) CountASNRanges(ctx context.Context) (int64, error) {

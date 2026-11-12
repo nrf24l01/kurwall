@@ -88,7 +88,7 @@ func (c *Catalog) Load(ctx context.Context) (CatalogResult, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	seen := map[int64]CatalogEntry{}
-	ranges := make([]CatalogRange, 0, 64*1024)
+	ranges := make([]CatalogRange, 0, 1<<20)
 	lines := 0
 	for scanner.Scan() {
 		lines++

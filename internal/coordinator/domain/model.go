@@ -3,6 +3,7 @@
 package domain
 
 import (
+	"net/netip"
 	"time"
 )
 
@@ -133,8 +134,8 @@ type ASNEntry struct {
 // ASNRange is one routed prefix range from the ASN catalog, used to map a
 // destination IP address to its ASN and country.
 type ASNRange struct {
-	StartIP string
-	EndIP   string
+	StartIP netip.Addr
+	EndIP   netip.Addr
 	ASN     int64
 	Country string
 	Name    string
