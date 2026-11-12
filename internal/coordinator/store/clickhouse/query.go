@@ -266,6 +266,62 @@ func (s *Store) Blocks(ctx context.Context, q domain.BlockQuery) ([]domain.Block
 	return out, total, rows.Err()
 }
 
+// trafficFlowColumns and trafficBlockColumns are the 24 columns of the two
+// union branches, in the shared output order scanned by Store.Traffic.
+var trafficFlowColumns = []string{
+	"event_id",
+	"'connection' AS kind",
+	"node_id",
+	"started_at AS at",
+	"ended_at",
+	"duration_ms",
+	"src_ip",
+	"dst_ip",
+	"src_port",
+	"dst_port",
+	"protocol",
+	"domain",
+	"sni",
+	"'' AS target",
+	"'' AS block_kind",
+	"container_id",
+	"container_name",
+	"bytes_in",
+	"bytes_out",
+	"toUInt64(packets_in) AS packets_in",
+	"toUInt64(packets_out) AS packets_out",
+	"false AS blocked",
+	"rule_id",
+	"reason",
+}
+
+var trafficBlockColumns = []string{
+	"event_id",
+	"'block' AS kind",
+	"node_id",
+	"block_events.at AS at",
+	"block_events.at AS ended_at",
+	"toUInt32(0) AS duration_ms",
+	"src_ip",
+	"dst_ip",
+	"src_port",
+	"dst_port",
+	"protocol",
+	"domain",
+	"'' AS sni",
+	"target",
+	"block_events.kind AS block_kind",
+	"container_id",
+	"container_name",
+	"toUInt64(0) AS bytes_in",
+	"toUInt64(0) AS bytes_out",
+	"toUInt64(0) AS packets_in",
+	"toUInt64(0) AS packets_out",
+	"true AS blocked",
+	"rule_id",
+	"reason",
+}
+
 // trafficBranches reports which storage tables a decision filter includes.
 func trafficBranches(decision string) (flows, blocks bool) {
 	switch decision {
@@ -286,8 +342,8 @@ func trafficWhere(q domain.TrafficQuery, flows bool) (*where, error) {
 		w.add("started_at >= ?", q.From)
 		w.add("started_at <= ?", q.To)
 	} else {
-		w.add("at >= ?", q.From)
-		w.add("at <= ?", q.To)
+		w.add("block_events.at >= ?", q.From)
+		w.add("block_events.at <= ?", q.To)
 	}
 	if q.NodeID != "" {
 		w.add("node_id = ?", q.NodeID)
@@ -323,10 +379,39 @@ func trafficWhere(q domain.TrafficQuery, flows bool) (*where, error) {
 		if flows {
 			w.add("(positionCaseInsensitive(domain, ?) > 0 OR positionCaseInsensitive(sni, ?) > 0)", q.Domain, q.Domain)
 		} else {
-			w.add("(positionCaseInsensitive(domain, ?) > 0 OR positionCaseInsensitive(target, ?) > 0)", q.Domain, q.Domain)
+			w.add("(positionCaseInsensitive(block_events.domain, ?) > 0 OR positionCaseInsensitive(block_events.target, ?) > 0)", q.Domain, q.Domain)
 		}
 	}
 	return w, nil
+}
+
+// buildTrafficQuery constructs the paginated union over the selected branches.
+// Filters are applied inside each branch before the union.
+func buildTrafficQuery(q domain.TrafficQuery, includeFlows, includeBlocks bool) (string, []any, error) {
+	flowWhere, err := trafficWhere(q, true)
+	if err != nil {
+		return "", nil, err
+	}
+	blockWhere, err := trafficWhere(q, false)
+	if err != nil {
+		return "", nil, err
+	}
+
+	union := make([]string, 0, 2)
+	args := make([]any, 0, len(flowWhere.args)+len(blockWhere.args))
+	if includeFlows {
+		union = append(union, "SELECT "+strings.Join(trafficFlowColumns, ",\n\t\t\t")+"\n\t\t\tFROM flows"+flowWhere.sql())
+		args = append(args, flowWhere.args...)
+	}
+	if includeBlocks {
+		union = append(union, "SELECT "+strings.Join(trafficBlockColumns, ",\n\t\t\t")+"\n\t\t\tFROM block_events"+blockWhere.sql())
+		args = append(args, blockWhere.args...)
+	}
+
+	limit, offset := paginate(q.Limit, q.Offset)
+	query := "SELECT * FROM (" + strings.Join(union, "\nUNION ALL\n") + ")" +
+		fmt.Sprintf(" ORDER BY at DESC, event_id DESC LIMIT %d OFFSET %d", limit, offset)
+	return query, args, nil
 }
 
 // Traffic returns allowed connections and blocking decisions in one feed.
@@ -358,32 +443,11 @@ func (s *Store) Traffic(ctx context.Context, q domain.TrafficQuery) ([]domain.Tr
 		total += blocks
 	}
 
-	limit, offset := paginate(q.Limit, q.Offset)
-	union := make([]string, 0, 2)
-	args := make([]any, 0, len(flowWhere.args)+len(blockWhere.args))
-	if includeFlows {
-		union = append(union, `SELECT event_id, 'connection' AS kind, node_id, started_at AS at, ended_at,
-			duration_ms, src_ip, dst_ip, src_port, dst_port, protocol,
-			domain, sni, '' AS target, '' AS block_kind,
-			container_id, container_name, toUInt64(bytes_in) AS bytes_in, toUInt64(bytes_out) AS bytes_out,
-			toUInt64(packets_in) AS packets_in, toUInt64(packets_out) AS packets_out,
-			false AS blocked, rule_id, reason
-			FROM flows`+flowWhere.sql())
-		args = append(args, flowWhere.args...)
+	limit, _ := paginate(q.Limit, q.Offset)
+	query, args, err := buildTrafficQuery(q, includeFlows, includeBlocks)
+	if err != nil {
+		return nil, 0, err
 	}
-	if includeBlocks {
-		union = append(union, `SELECT event_id, 'block' AS kind, node_id, block_events.at AS at, block_events.at AS ended_at,
-			toUInt32(0) AS duration_ms, src_ip, dst_ip, src_port, dst_port, protocol,
-			domain, '' AS sni, target, block_events.kind AS block_kind,
-			container_id, container_name, toUInt64(0) AS bytes_in, toUInt64(0) AS bytes_out,
-			toUInt64(0) AS packets_in, toUInt64(0) AS packets_out,
-			true AS blocked, rule_id, reason
-			FROM block_events`+blockWhere.sql())
-		args = append(args, blockWhere.args...)
-	}
-
-	query := "SELECT * FROM (" + strings.Join(union, "\nUNION ALL\n") + ")" +
-		fmt.Sprintf(" ORDER BY at DESC, event_id DESC LIMIT %d OFFSET %d", limit, offset)
 	rows, err := s.conn.Query(ctx, query, args...)
 	if err != nil {
 		return nil, 0, apperr.Internal("query traffic events", err)
