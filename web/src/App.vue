@@ -268,7 +268,7 @@ onBeforeUnmount(() => {
     <header class="hdr">
       <button class="hdr-menu" type="button" aria-label="Menu" @click="drawerOpen = true"><Menu :size="18" /></button>
       <RouterLink class="hdr-logo" to="/">
-        <img class="logo-mark" src="/logo-192.png" alt="" width="36" height="36" />
+        <img class="logo-mark" src="/logo-192.png" alt="" width="40" height="40" />
         <span class="brand"><b>Kurwall</b><span>Traffic control</span></span>
       </RouterLink>
 

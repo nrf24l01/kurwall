@@ -44,7 +44,7 @@ onMounted(() => userInput.value?.focus())
   <div class="auth">
     <form class="auth-panel" @submit.prevent="submit">
       <div class="auth-brand">
-        <img class="logo-mark auth-logo" src="/logo-192.png" alt="" width="56" height="56" />
+        <img class="logo-mark auth-logo" src="/logo-192.png" alt="" width="64" height="64" />
         <span class="brand"><b>Kurwall</b><span>Traffic control</span></span>
       </div>
 

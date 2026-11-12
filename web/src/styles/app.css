@@ -16,8 +16,8 @@
   border-right: 1px solid var(--overlay);
   color: var(--text); text-decoration: none !important;
 }
-.logo-mark { width: 36px; height: 36px; flex: none; display: block; object-fit: contain; }
-.auth-logo { width: 56px; height: 56px; }
+.logo-mark { width: 40px; height: 40px; flex: none; display: block; object-fit: contain; }
+.auth-logo { width: 64px; height: 64px; }
 .brand { min-width: 0; line-height: 16px; }
 .brand b { font-size: 13px; font-weight: 700; letter-spacing: .02em; }
 .brand span { display: block; color: var(--subtle); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
