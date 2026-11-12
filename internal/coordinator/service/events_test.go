@@ -42,7 +42,7 @@ type stubWriter struct {
 }
 
 func (s *stubWriter) InsertBatch(_ context.Context, _ string, events []domain.Event) error {
-	s.events = append([]domain.Event(nil), events...)
+	s.events = cloneEvents(events)
 	return nil
 }
 
@@ -53,7 +53,30 @@ type stubPublisher struct {
 }
 
 func (s *stubPublisher) PublishEvents(_ string, events []domain.Event) {
-	s.events = append([]domain.Event(nil), events...)
+	s.events = cloneEvents(events)
+}
+
+// cloneEvents deep-copies event payloads so stubs observe values at call time
+// instead of later in-place ASN enrichment of the shared records.
+func cloneEvents(events []domain.Event) []domain.Event {
+	out := make([]domain.Event, len(events))
+	for i, ev := range events {
+		out[i] = ev
+		if ev.Flow != nil {
+			flow := *ev.Flow
+			out[i].Flow = &flow
+		}
+		if ev.DNS != nil {
+			dns := *ev.DNS
+			dns.Answers = append([]string(nil), ev.DNS.Answers...)
+			out[i].DNS = &dns
+		}
+		if ev.Block != nil {
+			block := *ev.Block
+			out[i].Block = &block
+		}
+	}
+	return out
 }
 
 func TestTrafficDestinationIPs(t *testing.T) {
@@ -170,9 +193,14 @@ func TestIngestEnrichesPublishedEvents(t *testing.T) {
 			if len(writer.events) != 1 {
 				t.Fatalf("writer received %d events, want 1", len(writer.events))
 			}
+			if writer.events[0].Flow == nil || writer.events[0].Flow.DstASN != 0 || writer.events[0].Flow.DstCountry != "" {
+				t.Fatalf("writer snapshot = %+v, want pre-enrichment values", writer.events[0].Flow)
+			}
 			if len(publisher.events) != 1 || publisher.events[0].Flow == nil {
 				t.Fatalf("published events = %+v, want one flow", publisher.events)
 			}
+			// The publisher snapshots payloads at publish time, so this asserts
+			// enrichment happened before PublishEvents, not afterwards.
 			flow := publisher.events[0].Flow
 			if flow.DstASN != tc.wantASN || flow.DstCountry != tc.wantCountry {
 				t.Fatalf("published flow ASN = (%d, %q), want (%d, %q)", flow.DstASN, flow.DstCountry, tc.wantASN, tc.wantCountry)
