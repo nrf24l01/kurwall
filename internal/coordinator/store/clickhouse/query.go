@@ -337,6 +337,33 @@ func trafficBranches(decision string) (flows, blocks bool) {
 }
 
 // trafficWhere builds the filters shared by the traffic counts and branches.
+// localTrafficPredicate matches private, loopback, link-local, CGNAT,
+// multicast and unspecified addresses in either address family. Traffic is
+// considered local when both endpoints match.
+func localTrafficPredicate(column string) string {
+	prefixes := []string{
+		"::ffff:0.0.0.0/104",
+		"::ffff:10.0.0.0/104",
+		"::ffff:100.64.0.0/106",
+		"::ffff:127.0.0.0/104",
+		"::ffff:169.254.0.0/112",
+		"::ffff:172.16.0.0/108",
+		"::ffff:192.168.0.0/112",
+		"::ffff:224.0.0.0/100",
+		"::ffff:240.0.0.0/100",
+		"::1/128",
+		"fc00::/7",
+		"fe80::/10",
+		"ff00::/8",
+		"::/128",
+	}
+	parts := make([]string, 0, len(prefixes))
+	for _, prefix := range prefixes {
+		parts = append(parts, fmt.Sprintf("isIPAddressInRange(%s, '%s')", column, prefix))
+	}
+	return "(" + strings.Join(parts, " OR ") + ")"
+}
+
 func trafficWhere(q domain.TrafficQuery, flows bool) (*where, error) {
 	w := &where{}
 	if flows {
@@ -346,6 +373,9 @@ func trafficWhere(q domain.TrafficQuery, flows bool) (*where, error) {
 	} else {
 		w.add("block_events.at >= ?", q.From)
 		w.add("block_events.at <= ?", q.To)
+	}
+	if q.ExcludeLocal {
+		w.add("NOT (" + localTrafficPredicate("src_ip") + " AND " + localTrafficPredicate("dst_ip") + ")")
 	}
 	if q.NodeID != "" {
 		w.add("node_id = ?", q.NodeID)

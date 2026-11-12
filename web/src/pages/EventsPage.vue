@@ -17,6 +17,7 @@ const search = ref('')
 const container = ref('')
 const ip = ref('')
 const filter = ref('all')
+const excludeLocal = ref(false)
 const limit = 50
 const offset = ref(0)
 const live = ref(true)
@@ -53,7 +54,8 @@ const noFilters = computed(
     !search.value.trim() &&
     !container.value.trim() &&
     !ip.value.trim() &&
-    filter.value === 'all',
+    filter.value === 'all' &&
+    !excludeLocal.value,
 )
 
 const filterOptions = computed(() => {
@@ -109,6 +111,7 @@ async function load() {
         domain: search.value || undefined,
         ip: ip.value || undefined,
         decision: filter.value === 'all' ? undefined : filter.value,
+        excludeLocal: excludeLocal.value || undefined,
       })
     } else {
       dns.value = await api.dns({
@@ -226,6 +229,7 @@ function resetFilters() {
   container.value = ''
   ip.value = ''
   filter.value = 'all'
+  excludeLocal.value = false
   nodeId.value = 'all'
   range.value = '1h'
   offset.value = 0
@@ -300,7 +304,7 @@ function showDNS(event: DnsEvent) {
   ])
 }
 
-watch([range, nodeId, filter], () => {
+watch([range, nodeId, filter, excludeLocal], () => {
   offset.value = 0
   load()
 })
@@ -386,6 +390,16 @@ onMounted(async () => {
       </div>
       <button class="pc-btn" type="submit" :disabled="loading">Search</button>
       <button class="pc-btn pc-ghost" type="button" @click="resetFilters">Reset</button>
+      <button
+        v-if="tab === 'traffic'"
+        class="pc-chip"
+        type="button"
+        :aria-pressed="excludeLocal"
+        title="Hide events where both source and destination are local, private, CGNAT, link-local or multicast"
+        @click="excludeLocal = !excludeLocal"
+      >
+        {{ excludeLocal ? 'Local hidden' : 'Exclude local' }}
+      </button>
       <button class="pc-chip" type="button" :aria-pressed="live" @click="live = !live">
         <StatusMark :state="liveConnected ? 'running' : 'broken'" />
         {{ live ? 'Live' : 'Paused' }}

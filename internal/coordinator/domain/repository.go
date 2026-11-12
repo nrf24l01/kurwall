@@ -197,18 +197,19 @@ type TrafficEvent struct {
 
 // TrafficQuery filters the unified traffic history.
 type TrafficQuery struct {
-	NodeID    string
-	SrcIP     string
-	DstIP     string
-	IP        string
-	Domain    string
-	Container string
-	Decision  string
-	Protocol  *uint8
-	From      time.Time
-	To        time.Time
-	Limit     int
-	Offset    int
+	NodeID       string
+	SrcIP        string
+	DstIP        string
+	IP           string
+	Domain       string
+	Container    string
+	Decision     string
+	ExcludeLocal bool
+	Protocol     *uint8
+	From         time.Time
+	To           time.Time
+	Limit        int
+	Offset       int
 }
 
 // FlowQuery filters connection history.

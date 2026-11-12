@@ -170,3 +170,34 @@ func TestBuildTrafficQueryBranches(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildTrafficQueryExcludeLocal(t *testing.T) {
+	from := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
+	to := from.Add(time.Hour)
+
+	query, _, err := buildTrafficQuery(domain.TrafficQuery{From: from, To: to, ExcludeLocal: true}, true, true)
+	if err != nil {
+		t.Fatalf("buildTrafficQuery: %v", err)
+	}
+	for _, fragment := range []string{
+		"NOT (",
+		"isIPAddressInRange(src_ip, '::ffff:10.0.0.0/104')",
+		"isIPAddressInRange(src_ip, '::ffff:100.64.0.0/106')",
+		"isIPAddressInRange(src_ip, '::ffff:192.168.0.0/112')",
+		"isIPAddressInRange(dst_ip, 'fc00::/7')",
+		"isIPAddressInRange(dst_ip, 'fe80::/10')",
+		"isIPAddressInRange(dst_ip, 'ff00::/8')",
+	} {
+		if !strings.Contains(query, fragment) {
+			t.Fatalf("excludeLocal query is missing %q:\n%s", fragment, query)
+		}
+	}
+
+	without, _, err := buildTrafficQuery(domain.TrafficQuery{From: from, To: to}, true, true)
+	if err != nil {
+		t.Fatalf("buildTrafficQuery without excludeLocal: %v", err)
+	}
+	if strings.Contains(without, "isIPAddressInRange") {
+		t.Fatalf("excludeLocal predicate leaked into the default query:\n%s", without)
+	}
+}

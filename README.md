@@ -302,7 +302,7 @@ All responses use one envelope:
 | `GET /api/v1/events/flows` | Connection history |
 | `GET /api/v1/events/dns` | DNS history |
 | `GET /api/v1/events/blocks` | Blocking events |
-| `GET /api/v1/events/traffic` | Unified allowed/blocked feed (`nodeId`, `from`, `to`, `decision`, `domain`, `ip`, `srcIp`, `dstIp`, `container`, `protocol`, `limit`, `offset`) |
+| `GET /api/v1/events/traffic` | Unified allowed/blocked feed (`nodeId`, `from`, `to`, `decision`, `domain`, `ip`, `srcIp`, `dstIp`, `container`, `protocol`, `excludeLocal`, `limit`, `offset`) |
 | `GET /api/v1/stats/overview` | Dashboard counters |
 | `POST /api/v1/stream-ticket` | Issue a short-lived live-stream ticket |
 | `GET /api/v1/stream?ticket=…` | WebSocket live traffic and node status |
