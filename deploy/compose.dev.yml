@@ -70,6 +70,7 @@ services:
       KURWALL_GRPC_PUBLIC_ADDR: ${KURWALL_GRPC_PUBLIC_ADDR:-}
       KURWALL_AGENT_DIST_DIR: /app/agent-dist
       KURWALL_ENROLLMENT_DIR: /var/lib/kurwall/enrollment
+      KURWALL_ASN_CATALOG_URL: ${KURWALL_ASN_CATALOG_URL:-}
     volumes:
       - ./coordinator.yaml:/etc/kurwall/coordinator.yaml:ro
       - ./tls:/etc/kurwall/tls:ro
