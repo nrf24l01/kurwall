@@ -225,6 +225,7 @@ export interface Flow {
   reason: string
   network: string
   dstAsn?: number
+  dstAsnName?: string
   dstCountry?: string
 }
 
@@ -262,6 +263,7 @@ export interface BlockEvent {
   ruleId: string
   reason: string
   dstAsn?: number
+  dstAsnName?: string
   dstCountry?: string
 }
 
@@ -292,6 +294,7 @@ export interface TrafficEvent {
   reason?: string
   network?: string
   dstAsn?: number
+  dstAsnName?: string
   dstCountry?: string
 }
 

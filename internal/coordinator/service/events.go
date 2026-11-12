@@ -255,11 +255,13 @@ func enrichTrafficASN(events []domain.Event, info map[string]domain.ASNInfo) {
 		case events[i].Flow != nil:
 			if asn, ok := info[events[i].Flow.DstIP]; ok {
 				events[i].Flow.DstASN = asn.ASN
+				events[i].Flow.DstASName = asn.Name
 				events[i].Flow.DstCountry = asn.Country
 			}
 		case events[i].Block != nil:
 			if asn, ok := info[events[i].Block.DstIP]; ok {
 				events[i].Block.DstASN = asn.ASN
+				events[i].Block.DstASName = asn.Name
 				events[i].Block.DstCountry = asn.Country
 			}
 		}
@@ -386,6 +388,7 @@ func (s *Events) Traffic(ctx context.Context, q domain.TrafficQuery) (domain.Pag
 	for i := range items {
 		if asn, ok := info[items[i].DstIP]; ok {
 			items[i].DstASN = asn.ASN
+			items[i].DstASName = asn.Name
 			items[i].DstCountry = asn.Country
 		}
 	}

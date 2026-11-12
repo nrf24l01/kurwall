@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ConsoleDialog from '@/components/console/ConsoleDialog.vue'
 import PageHead from '@/components/console/PageHead.vue'
 import StatusMark from '@/components/console/StatusMark.vue'
@@ -20,6 +20,7 @@ const filter = ref('all')
 const excludeLocal = ref(false)
 const limit = 50
 const offset = ref(0)
+const loadingMore = ref(false)
 const live = ref(true)
 
 const nodes = ref<Node[]>([])
@@ -45,6 +46,10 @@ const tabs: { value: Tab; label: string }[] = [
 const nodeNames = computed(() => new Map(nodes.value.map((node) => [node.id, node.name])))
 const total = computed(() => (tab.value === 'traffic' ? traffic.value?.total : dns.value?.total) ?? 0)
 const page = computed(() => (tab.value === 'traffic' ? traffic.value : dns.value))
+const hasMore = computed(() => {
+  const current = page.value
+  return Boolean(current && current.items.length < current.total)
+})
 const tabLabel = computed(() => tabs.find((item) => item.value === tab.value)?.label ?? '')
 const subtitle = computed(() => `${formatNumber(total.value)} ${tabLabel.value.toLowerCase()} · ${rangeLabel.value}`)
 const rangeLabel = computed(() => ranges.find((item) => item.value === range.value)?.label ?? '')
@@ -87,12 +92,36 @@ function targetLabel(event: TrafficEvent): string {
   return event.target || event.sni || event.domain || '—'
 }
 
+function asnLabel(event: TrafficEvent): string {
+  if (event.dstAsnName) return event.dstAsnName
+  if (event.dstAsn) return `AS${event.dstAsn}`
+  return '—'
+}
+
 function egressLabel(event: TrafficEvent): string {
   if (event.kind !== 'connection' || event.bytesOut === undefined) return '—'
   return event.bytesOut > 0 ? formatBytes(event.bytesOut) : '0 B'
 }
 
+let searchTimer: number | undefined
+let skipSearchWatch = false
+
+function cancelSearch() {
+  if (searchTimer !== undefined) {
+    window.clearTimeout(searchTimer)
+    searchTimer = undefined
+  }
+}
+
+function maybeLoadMore() {
+  if (loading.value || loadingMore.value || !hasMore.value) return
+  if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 400) {
+    void loadMore()
+  }
+}
+
 async function load() {
+  offset.value = 0
   loading.value = true
   error.value = ''
   const window = rangeWindow(range.value)
@@ -125,6 +154,60 @@ async function load() {
     error.value = errorMessage(err)
   } finally {
     loading.value = false
+    void nextTick(() => maybeLoadMore())
+  }
+}
+
+async function loadMore() {
+  if (loading.value || loadingMore.value) return
+  const active = page.value
+  if (!active || active.items.length >= active.total) return
+  loadingMore.value = true
+  error.value = ''
+  const window = rangeWindow(range.value)
+  const common = {
+    nodeId: nodeId.value === 'all' ? undefined : nodeId.value,
+    container: container.value || undefined,
+    limit,
+    from: window.from,
+    to: window.to,
+  }
+  try {
+    if (tab.value === 'traffic') {
+      const current = traffic.value
+      if (!current || current.items.length >= current.total) return
+      const next = await api.traffic({
+        ...common,
+        offset: current.items.length,
+        domain: search.value || undefined,
+        ip: ip.value || undefined,
+        decision: filter.value === 'all' ? undefined : filter.value,
+        excludeLocal: excludeLocal.value || undefined,
+      })
+      const seen = new Set(current.items.map((item) => item.eventId))
+      const items = [...current.items, ...next.items.filter((item) => !seen.has(item.eventId))]
+      traffic.value = { ...next, items }
+      offset.value = items.length
+    } else {
+      const current = dns.value
+      if (!current || current.items.length >= current.total) return
+      const next = await api.dns({
+        ...common,
+        offset: current.items.length,
+        domain: search.value || undefined,
+        clientIp: ip.value || undefined,
+        blocked: filter.value === 'all' ? undefined : filter.value === 'blocked',
+      })
+      const seen = new Set(current.items.map((item) => item.eventId))
+      const items = [...current.items, ...next.items.filter((item) => !seen.has(item.eventId))]
+      dns.value = { ...next, items }
+      offset.value = items.length
+    }
+  } catch (err) {
+    error.value = errorMessage(err)
+  } finally {
+    loadingMore.value = false
+    void nextTick(() => maybeLoadMore())
   }
 }
 
@@ -169,6 +252,7 @@ function flowToTraffic(flow: Flow): TrafficEvent {
     reason: flow.reason,
     network: flow.network,
     dstAsn: flow.dstAsn,
+    dstAsnName: flow.dstAsnName,
     dstCountry: flow.dstCountry,
   }
 }
@@ -193,6 +277,7 @@ function blockToTraffic(block: BlockEvent): TrafficEvent {
     ruleId: block.ruleId,
     reason: block.reason,
     dstAsn: block.dstAsn,
+    dstAsnName: block.dstAsnName,
     dstCountry: block.dstCountry,
   }
 }
@@ -220,12 +305,17 @@ watch([liveFlows, liveBlocks], ([flows, blocks], [prevFlows, prevBlocks]) => {
 })
 
 function applyFilters() {
+  cancelSearch()
   offset.value = 0
   load()
 }
 
 function resetFilters() {
-  search.value = ''
+  cancelSearch()
+  if (search.value !== '') {
+    skipSearchWatch = true
+    search.value = ''
+  }
   container.value = ''
   ip.value = ''
   filter.value = 'all'
@@ -238,6 +328,7 @@ function resetFilters() {
 
 function changeTab(value: Tab) {
   if (tab.value === value) return
+  cancelSearch()
   tab.value = value
   filter.value = 'all'
   offset.value = 0
@@ -272,9 +363,10 @@ function showTraffic(event: TrafficEvent) {
     )
   }
   const asn = event.dstAsn ? `AS${event.dstAsn}` : ''
+  const asnName = event.dstAsnName || asn
   const country = event.dstCountry ? `${countryFlag(event.dstCountry)} ${event.dstCountry}`.trim() : ''
   fields.push(
-    { label: 'ASN / country', value: [asn, country].filter(Boolean).join(' · ') || '—' },
+    { label: 'ASN / country', value: [asnName, asnName !== asn ? asn : '', country].filter(Boolean).join(' · ') || '—' },
   )
   if (event.kind === 'block' && event.blockKind === 'dns') {
     fields.push({ label: 'ASN source', value: 'Resolver IP; the blocked domain itself has no ASN.' })
@@ -308,7 +400,18 @@ watch([range, nodeId, filter, excludeLocal], () => {
   offset.value = 0
   load()
 })
-watch(offset, load)
+watch(search, () => {
+  if (skipSearchWatch) {
+    skipSearchWatch = false
+    return
+  }
+  cancelSearch()
+  searchTimer = window.setTimeout(() => {
+    searchTimer = undefined
+    offset.value = 0
+    load()
+  }, 300)
+})
 // Resuming live mode replays history so events missed while paused do not
 // leave a silent gap until the next manual refresh.
 watch(live, (on) => {
@@ -321,7 +424,12 @@ onMounted(async () => {
   } catch {
     nodes.value = []
   }
+  window.addEventListener('scroll', maybeLoadMore, { passive: true })
   load()
+})
+onBeforeUnmount(() => {
+  cancelSearch()
+  window.removeEventListener('scroll', maybeLoadMore)
 })
 </script>
 
@@ -422,7 +530,7 @@ onMounted(async () => {
                   <th>Source</th>
                   <th>Destination</th>
                   <th>Target / domain</th>
-                  <th>ASN</th>
+                  <th>ASN name</th>
                   <th>Country</th>
                   <th class="num">Egress</th>
                   <th class="num">Decision</th>
@@ -446,7 +554,7 @@ onMounted(async () => {
                       <span v-if="event.blocked && event.blockKind" class="tag">{{ event.blockKind }}</span>
                       <span class="ell" :title="targetLabel(event)">{{ targetLabel(event) }}</span>
                     </td>
-                    <td>{{ event.dstAsn ? `AS${event.dstAsn}` : '—' }}</td>
+                    <td class="subtle"><span class="ell" :title="asnLabel(event)">{{ asnLabel(event) }}</span></td>
                     <td>
                       <template v-if="event.dstCountry">
                         <span class="flag" aria-hidden="true">{{ countryFlag(event.dstCountry) }}</span> {{ event.dstCountry }}
@@ -506,11 +614,12 @@ onMounted(async () => {
         <div class="pager">
           <span>{{ page ? `${formatNumber(page.items.length)} shown · ${formatNumber(page.total)} total` : '—' }}</span>
           <span class="pages">
-            <button class="pc-btn pc-sm" type="button" :disabled="offset === 0" @click="offset = Math.max(0, offset - limit)">‹ Previous</button>
-            <button class="pc-btn pc-sm" type="button" :disabled="!page || offset + limit >= page.total" @click="offset = offset + limit">Next ›</button>
+            <button v-if="hasMore" class="pc-btn pc-sm" type="button" :disabled="loadingMore" @click="loadMore">
+              {{ loadingMore ? 'Loading…' : 'Load more' }}
+            </button>
           </span>
         </div>
-        <div class="foot">Click a row for every field. Filters search the selected window only.</div>
+        <div class="foot">Scroll to load more. Click a row for every field. Filters search the selected window only.</div>
       </section>
     </div>
 

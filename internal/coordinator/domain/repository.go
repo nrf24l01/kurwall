@@ -118,8 +118,9 @@ type FlowRecord struct {
 	RuleID        string    `json:"ruleId"`
 	Reason        string    `json:"reason"`
 	Network       string    `json:"network"`
-	// DstASN and DstCountry are live-only enrichment; they are not persisted.
+	// DstASN, DstASName and DstCountry are live-only enrichment; they are not persisted.
 	DstASN     int64  `json:"dstAsn,omitempty"`
+	DstASName  string `json:"dstAsnName,omitempty"`
 	DstCountry string `json:"dstCountry,omitempty"`
 }
 
@@ -158,8 +159,9 @@ type BlockRecord struct {
 	ContainerName string    `json:"containerName"`
 	RuleID        string    `json:"ruleId"`
 	Reason        string    `json:"reason"`
-	// DstASN and DstCountry are live-only enrichment; they are not persisted.
+	// DstASN, DstASName and DstCountry are live-only enrichment; they are not persisted.
 	DstASN     int64  `json:"dstAsn,omitempty"`
+	DstASName  string `json:"dstAsnName,omitempty"`
 	DstCountry string `json:"dstCountry,omitempty"`
 }
 
@@ -192,6 +194,7 @@ type TrafficEvent struct {
 	Reason        string    `json:"reason"`
 	Network       string    `json:"network,omitempty"`
 	DstASN        int64     `json:"dstAsn,omitempty"`
+	DstASName     string    `json:"dstAsnName,omitempty"`
 	DstCountry    string    `json:"dstCountry,omitempty"`
 }
 

@@ -109,8 +109,8 @@ func TestTrafficDestinationIPs(t *testing.T) {
 
 func TestEnrichTrafficASN(t *testing.T) {
 	info := map[string]domain.ASNInfo{
-		"203.0.113.10": {ASN: 64500, Country: "DE"},
-		"198.51.100.7": {ASN: 64501, Country: "US"},
+		"203.0.113.10": {ASN: 64500, Name: "TEST-DE", Country: "DE"},
+		"198.51.100.7": {ASN: 64501, Name: "TEST-US", Country: "US"},
 	}
 	events := []domain.Event{
 		{Kind: "flow", Flow: &domain.FlowRecord{DstIP: "203.0.113.10"}},
@@ -122,13 +122,13 @@ func TestEnrichTrafficASN(t *testing.T) {
 
 	enrichTrafficASN(events, info)
 
-	if events[0].Flow.DstASN != 64500 || events[0].Flow.DstCountry != "DE" {
-		t.Fatalf("flow enrichment = (%d, %q), want (64500, \"DE\")", events[0].Flow.DstASN, events[0].Flow.DstCountry)
+	if events[0].Flow.DstASN != 64500 || events[0].Flow.DstASName != "TEST-DE" || events[0].Flow.DstCountry != "DE" {
+		t.Fatalf("flow enrichment = (%d, %q, %q), want (64500, \"TEST-DE\", \"DE\")", events[0].Flow.DstASN, events[0].Flow.DstASName, events[0].Flow.DstCountry)
 	}
-	if events[1].Block.DstASN != 64501 || events[1].Block.DstCountry != "US" {
-		t.Fatalf("block enrichment = (%d, %q), want (64501, \"US\")", events[1].Block.DstASN, events[1].Block.DstCountry)
+	if events[1].Block.DstASN != 64501 || events[1].Block.DstASName != "TEST-US" || events[1].Block.DstCountry != "US" {
+		t.Fatalf("block enrichment = (%d, %q, %q), want (64501, \"TEST-US\", \"US\")", events[1].Block.DstASN, events[1].Block.DstASName, events[1].Block.DstCountry)
 	}
-	if events[3].Flow.DstASN != 0 || events[3].Flow.DstCountry != "" {
+	if events[3].Flow.DstASN != 0 || events[3].Flow.DstASName != "" || events[3].Flow.DstCountry != "" {
 		t.Fatalf("unknown destination gained ASN data: %+v", events[3].Flow)
 	}
 
@@ -176,12 +176,14 @@ func TestIngestEnrichesPublishedEvents(t *testing.T) {
 		name        string
 		repo        *stubASNRepo
 		wantASN     int64
+		wantName    string
 		wantCountry string
 	}{
 		{
 			name:        "resolved",
-			repo:        &stubASNRepo{info: map[string]domain.ASNInfo{"203.0.113.10": {ASN: 64500, Country: "DE"}}},
+			repo:        &stubASNRepo{info: map[string]domain.ASNInfo{"203.0.113.10": {ASN: 64500, Name: "TEST-DE", Country: "DE"}}},
 			wantASN:     64500,
+			wantName:    "TEST-DE",
 			wantCountry: "DE",
 		},
 		{
@@ -209,8 +211,8 @@ func TestIngestEnrichesPublishedEvents(t *testing.T) {
 			// The publisher snapshots payloads at publish time, so this asserts
 			// enrichment happened before PublishEvents, not afterwards.
 			flow := publisher.events[0].Flow
-			if flow.DstASN != tc.wantASN || flow.DstCountry != tc.wantCountry {
-				t.Fatalf("published flow ASN = (%d, %q), want (%d, %q)", flow.DstASN, flow.DstCountry, tc.wantASN, tc.wantCountry)
+			if flow.DstASN != tc.wantASN || flow.DstASName != tc.wantName || flow.DstCountry != tc.wantCountry {
+				t.Fatalf("published flow ASN = (%d, %q, %q), want (%d, %q, %q)", flow.DstASN, flow.DstASName, flow.DstCountry, tc.wantASN, tc.wantName, tc.wantCountry)
 			}
 		})
 	}
@@ -249,11 +251,11 @@ func TestIngestASNLookupTimeoutStillPublishes(t *testing.T) {
 }
 
 func TestFlowAndBlockASNJSON(t *testing.T) {
-	flow, err := json.Marshal(domain.FlowRecord{DstASN: 64500, DstCountry: "DE"})
+	flow, err := json.Marshal(domain.FlowRecord{DstASN: 64500, DstASName: "TEST-DE", DstCountry: "DE"})
 	if err != nil {
 		t.Fatalf("marshal flow: %v", err)
 	}
-	for _, want := range []string{`"dstAsn":64500`, `"dstCountry":"DE"`} {
+	for _, want := range []string{`"dstAsn":64500`, `"dstAsnName":"TEST-DE"`, `"dstCountry":"DE"`} {
 		if !strings.Contains(string(flow), want) {
 			t.Fatalf("flow JSON %s is missing %s", flow, want)
 		}
@@ -263,15 +265,15 @@ func TestFlowAndBlockASNJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal unresolved flow: %v", err)
 	}
-	if strings.Contains(string(unresolved), "dstAsn") || strings.Contains(string(unresolved), "dstCountry") {
+	if strings.Contains(string(unresolved), "dstAsn") || strings.Contains(string(unresolved), "dstAsnName") || strings.Contains(string(unresolved), "dstCountry") {
 		t.Fatalf("unresolved flow JSON should omit ASN fields: %s", unresolved)
 	}
 
-	block, err := json.Marshal(domain.BlockRecord{DstASN: 64501, DstCountry: "US"})
+	block, err := json.Marshal(domain.BlockRecord{DstASN: 64501, DstASName: "TEST-US", DstCountry: "US"})
 	if err != nil {
 		t.Fatalf("marshal block: %v", err)
 	}
-	for _, want := range []string{`"dstAsn":64501`, `"dstCountry":"US"`} {
+	for _, want := range []string{`"dstAsn":64501`, `"dstAsnName":"TEST-US"`, `"dstCountry":"US"`} {
 		if !strings.Contains(string(block), want) {
 			t.Fatalf("block JSON %s is missing %s", block, want)
 		}
