@@ -153,7 +153,7 @@ func registerStatic(e *echo.Echo, dir string) {
 	if _, err := os.Stat(assets); err == nil {
 		e.Static("/assets", assets)
 	}
-	for _, name := range []string{"favicon.svg", "favicon.ico", "apple-touch-icon.png"} {
+	for _, name := range []string{"favicon-32x32.png", "favicon-16x16.png", "favicon.ico", "apple-touch-icon.png"} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
 			e.File("/"+name, filepath.Join(dir, name))
 		}
