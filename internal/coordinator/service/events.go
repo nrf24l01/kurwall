@@ -77,7 +77,10 @@ func (s *Events) Ingest(ctx context.Context, nodeID, batchID string, events []*k
 		_ = s.repo.ReleaseBatch(ctx, nodeID, batchID)
 		return false, apperr.Unavailable("EVENT_STORE_UNAVAILABLE", "event storage is temporarily unavailable", err)
 	}
+	// Enrich live frames after persistence so history stays the source of truth;
+	// ASN lookup failures only omit the optional fields.
 	if s.publisher != nil {
+		enrichTrafficASN(converted, s.asnInfo(ctx, trafficDestinationIPs(converted)))
 		s.publisher.PublishEvents(nodeID, converted)
 	}
 	if err := s.repo.CommitBatch(ctx, nodeID, batchID, time.Now().UTC()); err != nil {
@@ -216,6 +219,47 @@ func toBlock(nodeID, eventID string, b *kurwallv1.BlockEvent) (*domain.BlockReco
 	}, nil
 }
 
+// trafficDestinationIPs returns destination addresses from flow and block
+// events. DNS events carry no destination and are intentionally excluded.
+func trafficDestinationIPs(events []domain.Event) []string {
+	ips := make([]string, 0, len(events))
+	for i := range events {
+		switch {
+		case events[i].Flow != nil:
+			if events[i].Flow.DstIP != "" {
+				ips = append(ips, events[i].Flow.DstIP)
+			}
+		case events[i].Block != nil:
+			if events[i].Block.DstIP != "" {
+				ips = append(ips, events[i].Block.DstIP)
+			}
+		}
+	}
+	return ips
+}
+
+// enrichTrafficASN attaches resolved ASN data to flow and block events in
+// place. Destinations without a match keep the zero value so JSON omits them.
+func enrichTrafficASN(events []domain.Event, info map[string]domain.ASNInfo) {
+	if len(info) == 0 {
+		return
+	}
+	for i := range events {
+		switch {
+		case events[i].Flow != nil:
+			if asn, ok := info[events[i].Flow.DstIP]; ok {
+				events[i].Flow.DstASN = asn.ASN
+				events[i].Flow.DstCountry = asn.Country
+			}
+		case events[i].Block != nil:
+			if asn, ok := info[events[i].Block.DstIP]; ok {
+				events[i].Block.DstASN = asn.ASN
+				events[i].Block.DstCountry = asn.Country
+			}
+		}
+	}
+}
+
 func requiredIP(raw string) (string, error) {
 	addr, err := netip.ParseAddr(strings.TrimSpace(raw))
 	if err != nil {
@@ -341,7 +385,8 @@ func (s *Events) Traffic(ctx context.Context, q domain.TrafficQuery) (domain.Pag
 }
 
 // asnInfo resolves ASN data for the unique, normalized IPs in one lookup.
-// Lookup failures are ignored so event reads stay available without ASN data.
+// Lookup failures are logged and ignored so event reads stay available
+// without ASN data.
 func (s *Events) asnInfo(ctx context.Context, ips []string) map[string]domain.ASNInfo {
 	out := make(map[string]domain.ASNInfo)
 	if s.repo == nil || len(ips) == 0 {
@@ -366,6 +411,7 @@ func (s *Events) asnInfo(ctx context.Context, ips []string) map[string]domain.AS
 	}
 	info, err := s.repo.LookupASNForIPs(ctx, unique)
 	if err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Int("ips", len(unique)).Msg("failed to look up ASN for event IPs")
 		return out
 	}
 	if info == nil {
