@@ -134,6 +134,8 @@
 .pc-table th.num, .pc-table td.num { text-align: right; }
 .pc-table tr.pc-row { cursor: pointer; }
 .pc-table tr.pc-row:focus-visible { outline-offset: -1px; }
+.pc-table tr.pc-row-blocked td { background: var(--iris-bg); }
+.pc-table tr.pc-row-blocked td:first-child { box-shadow: inset 2px 0 0 var(--iris); }
 .pc-table tr.pc-cur { position: relative; }
 .pc-table tr.pc-cur td:first-child { position: relative; }
 .pc-table tr.pc-cur td:first-child::before { content: "›"; position: absolute; left: 4px; color: var(--text); }
