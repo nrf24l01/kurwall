@@ -44,7 +44,8 @@ function changeField(condition: TrafficCondition, field: string) {
       <button class="pc-btn pc-sm" type="button" @click="addCondition">Add condition</button>
     </div>
     <div v-if="conditions.length === 0" class="filter-empty">
-      Add a condition to filter by IP, port, protocol, domain, decision, block kind or size.
+      Add a condition to filter by IP, port, protocol, domain, decision, block kind or size. Use
+      “Text (any field)” to search domain, target, reason and container together.
     </div>
     <div v-for="(condition, index) in conditions" :key="index" class="filter-row">
       <span class="filter-connector">{{ index === 0 ? '' : match === 'all' ? 'AND' : 'OR' }}</span>

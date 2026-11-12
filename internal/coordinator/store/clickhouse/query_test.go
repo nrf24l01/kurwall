@@ -262,3 +262,25 @@ func TestBuildTrafficQueryConditions(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildTrafficQueryTextCondition(t *testing.T) {
+	from := time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
+	query, _, err := buildTrafficQuery(domain.TrafficQuery{
+		From: from, To: from.Add(time.Hour), Match: "all",
+		Conditions: []domain.TrafficCondition{{Field: "text", Operator: "contains", Value: "cloudflare"}},
+	}, true, true)
+	if err != nil {
+		t.Fatalf("buildTrafficQuery: %v", err)
+	}
+	for _, fragment := range []string{
+		"positionCaseInsensitive(domain, ?) > 0",
+		"positionCaseInsensitive(sni, ?) > 0",
+		"positionCaseInsensitive(target, ?) > 0",
+		"positionCaseInsensitive(reason, ?) > 0",
+		"positionCaseInsensitive(container_name, ?) > 0",
+	} {
+		if !strings.Contains(query, fragment) {
+			t.Fatalf("text condition query is missing %q:\n%s", fragment, query)
+		}
+	}
+}

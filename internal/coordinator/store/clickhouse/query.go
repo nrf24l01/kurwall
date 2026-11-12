@@ -502,6 +502,8 @@ func trafficCondition(condition domain.TrafficCondition) (string, []any, error) 
 			return "", nil, err
 		}
 		return comparison("protocol", operator, protocol)
+	case "text":
+		return stringCondition([]string{"domain", "sni", "target", "reason", "container_name", "container_id"}, operator, value)
 	case "domain":
 		return stringCondition([]string{"domain", "sni", "target"}, operator, value)
 	case "sni":

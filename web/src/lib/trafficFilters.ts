@@ -18,6 +18,7 @@ const numberOperators = ['eq', 'ne', 'gt', 'gte', 'lt', 'lte']
 const choiceOperators = ['eq', 'ne']
 
 export const trafficFields: TrafficField[] = [
+  { value: 'text', label: 'Text (any field)', type: 'text', operators: textOperators },
   { value: 'ip.addr', label: 'IP address', type: 'ip', operators: choiceOperators },
   { value: 'ip.src', label: 'Source IP', type: 'ip', operators: choiceOperators },
   { value: 'ip.dst', label: 'Destination IP', type: 'ip', operators: choiceOperators },
