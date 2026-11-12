@@ -475,10 +475,11 @@ git commit -m "feat: stream live rows into traffic table"
 
 ---
 
-### Task 7: Bigger brand mark using the new icon
+### Task 7: Bigger favicon and brand mark
 
 **Files:**
-- Create: `web/public/logo-128.png`
+- Create: `web/public/logo-192.png`
+- Create: `web/public/favicon-192x192.png`
 - Modify: `web/index.html`
 - Modify: `web/src/App.vue`
 - Modify: `web/src/pages/LoginPage.vue`
@@ -486,50 +487,56 @@ git commit -m "feat: stream live rows into traffic table"
 - Modify: `internal/coordinator/httpapi/router.go`
 
 **Interfaces:**
-- Produces: `/logo-128.png` served by the coordinator.
-- Header brand mark displays at 28×28; login brand mark at 40×40.
+- Produces: `/logo-192.png` and `/favicon-192x192.png` served by the coordinator.
+- Header brand mark displays at 36×36; login brand mark at 56×56.
+- Adds a 192×192 favicon link for devices/PWAs that request a larger icon.
 
-- [ ] **Step 1: Generate the asset**
+- [ ] **Step 1: Generate the assets**
 
 ```bash
-magick fav.png -resize 128x128 -strip web/public/logo-128.png
+magick fav.png -resize 192x192 -strip web/public/logo-192.png
+magick fav.png -resize 192x192 -strip web/public/favicon-192x192.png
 ```
 
-Add `logo-128.png` to the static-file whitelist. No new `<link>` is needed; the favicon links stay.
+Add `logo-192.png` and `favicon-192x192.png` to the static-file whitelist. Add the favicon link to `index.html`:
 
-- [ ] **Step 2: Replace the CSS square**
+```html
+<link rel="icon" type="image/png" sizes="192x192" href="/favicon-192x192.png" />
+```
+
+- [ ] **Step 2: Replace the CSS square with the larger icon**
 
 Header:
 
 ```html
-<img class="logo-mark" src="/logo-128.png" alt="" width="28" height="28" />
+<img class="logo-mark" src="/logo-192.png" alt="" width="36" height="36" />
 ```
 
 Login:
 
 ```html
-<img class="logo-mark auth-logo" src="/logo-128.png" alt="" width="40" height="40" />
+<img class="logo-mark auth-logo" src="/logo-192.png" alt="" width="56" height="56" />
 ```
 
 CSS:
 
 ```css
-.logo-mark { width: 28px; height: 28px; flex: none; display: block; object-fit: contain; }
-.auth-logo { width: 40px; height: 40px; }
+.logo-mark { width: 36px; height: 36px; flex: none; display: block; object-fit: contain; }
+.auth-logo { width: 56px; height: 56px; }
 ```
 
-Remove `.logo-mark::before`.
+Remove `.logo-mark::before`. The header is 48 px tall, so 36 px leaves 6 px above/below.
 
 - [ ] **Step 3: Verify**
 
 Run: `cd web && bun run typecheck && bun run build`
-Expected: PASS; `/logo-128.png` is emitted into `dist/`.
+Expected: PASS; both assets are emitted into `dist/`.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add web/public/logo-128.png web/index.html web/src/App.vue web/src/pages/LoginPage.vue web/src/styles/app.css internal/coordinator/httpapi/router.go
-git commit -m "feat: enlarge brand mark with project icon"
+git add web/public/logo-192.png web/public/favicon-192x192.png web/index.html web/src/App.vue web/src/pages/LoginPage.vue web/src/styles/app.css internal/coordinator/httpapi/router.go
+git commit -m "feat: enlarge favicon and brand mark"
 ```
 
 ---
