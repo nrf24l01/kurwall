@@ -175,8 +175,9 @@ git commit -m "feat: store ASN ranges for destination lookup"
 - Produces: `domain.TrafficEvent` with the JSON fields in the spec, `domain.TrafficQuery`.
 - Produces: `EventReader.Traffic(ctx, TrafficQuery) ([]TrafficEvent, uint64, error)`.
 - Produces: `Events.Traffic(ctx, TrafficQuery) (domain.Page[domain.TrafficEvent], error)`.
+- Produces: `Events.asnInfo(ctx context.Context, ips []string) map[string]domain.ASNInfo`; performs one `repo.LookupASNForIPs` call and returns an empty map on failure.
 - Produces: `GET /api/v1/events/traffic`.
-- `Events.Traffic` enriches `DstASN`/`DstCountry` via `repo.LookupASNForIPs`; lookup failures are ignored.
+- `Events.Traffic` enriches `DstASN`/`DstCountry` via `asnInfo`; lookup failures are ignored.
 
 - [ ] **Step 1: Write the branch-selection test**
 
@@ -239,7 +240,13 @@ Expected: PASS.
 
 - [ ] **Step 5: Add the service method and enrichment**
 
-Add `Events.Traffic`: normalize the window, call `reader.Traffic`, collect unique `DstIP` values, call `repo.LookupASNForIPs` once, set `DstASN`/`DstCountry`, and return `domain.Page`. Ignore lookup errors.
+Add `Events.Traffic`: normalize the window, call `reader.Traffic`, collect unique `DstIP` values, and call the `asnInfo` helper once. Set `DstASN`/`DstCountry` and return `domain.Page`. Add the helper:
+
+```go
+func (s *Events) asnInfo(ctx context.Context, ips []string) map[string]domain.ASNInfo
+```
+
+It normalizes/deduplicates the IPs, calls `s.repo.LookupASNForIPs`, and returns an empty map on error.
 
 - [ ] **Step 6: Add the handler and route**
 
@@ -266,6 +273,7 @@ git commit -m "feat: add unified traffic events API"
 - Modify: `internal/coordinator/service/events.go`
 
 **Interfaces:**
+- Consumes: `Events.asnInfo(ctx, ips)` from Task 2.
 - Produces: `FlowRecord.DstASN int64` / `DstCountry string` and the same on `BlockRecord`, serialized as `dstAsn`/`dstCountry`.
 - Produces: `Events.Ingest` enriches flow and block records after insert and before `PublishEvents`.
 
@@ -282,7 +290,7 @@ They are not persisted in ClickHouse; the insert mapper ignores them.
 
 - [ ] **Step 2: Enrich before live publish**
 
-In `Ingest`, after `writer.InsertBatch` and before `publisher.PublishEvents`, collect destination IPs from `ev.Flow` and `ev.Block`, call `repo.LookupASNForIPs` once, and set the fields. Log and continue if the lookup fails. Do not enrich DNS events.
+In `Ingest`, after `writer.InsertBatch` and before `publisher.PublishEvents`, collect destination IPs from `ev.Flow` and `ev.Block`, call the `asnInfo` helper once, and set the fields. Log and continue if the lookup fails. Do not enrich DNS events.
 
 - [ ] **Step 3: Build and test**
 
