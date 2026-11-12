@@ -10,7 +10,7 @@ import {
   type AsnEntry,
   type Policy,
 } from '@/lib/api'
-import { formatNumber, formatTime } from '@/lib/utils'
+import { countryFlag, formatNumber, formatTime } from '@/lib/utils'
 import { canWrite } from '@/lib/session'
 import { useRefresh, useRowCursor } from '@/lib/ui'
 
@@ -86,11 +86,6 @@ function countryName(code: string): string {
   } catch {
     return code
   }
-}
-
-function countryFlag(code: string): string {
-  if (!code || code.length !== 2) return ''
-  return String.fromCodePoint(...[...code.toUpperCase()].map((char) => 127397 + char.charCodeAt(0)))
 }
 
 function companyInitials(name: string): string {

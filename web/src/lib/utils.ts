@@ -63,6 +63,11 @@ export function rangeWindow(range: string): { from: string; to: string } {
   return { from: from.toISOString(), to: to.toISOString() }
 }
 
+export function countryFlag(code: string): string {
+  if (!code || code.length !== 2) return ''
+  return String.fromCodePoint(...[...code.toUpperCase()].map((char) => 127397 + char.charCodeAt(0)))
+}
+
 export function formatDuration(ms: number | undefined | null): string {
   const value = ms ?? 0
   if (value < 1000) return `${value} ms`

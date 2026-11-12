@@ -224,6 +224,8 @@ export interface Flow {
   ruleId: string
   reason: string
   network: string
+  dstAsn?: number
+  dstCountry?: string
 }
 
 export interface DnsEvent {
@@ -259,6 +261,37 @@ export interface BlockEvent {
   containerName: string
   ruleId: string
   reason: string
+  dstAsn?: number
+  dstCountry?: string
+}
+
+export interface TrafficEvent {
+  kind: 'connection' | 'block'
+  eventId: string
+  nodeId: string
+  at: string
+  endedAt?: string
+  durationMs?: number
+  srcIp: string
+  srcPort: number
+  dstIp: string
+  dstPort: number
+  protocol: number
+  domain?: string
+  sni?: string
+  target?: string
+  blockKind?: string
+  containerId?: string
+  containerName?: string
+  bytesIn?: number
+  bytesOut?: number
+  packetsIn?: number
+  packetsOut?: number
+  blocked: boolean
+  ruleId?: string
+  reason?: string
+  dstAsn?: number
+  dstCountry?: string
 }
 
 export interface Page<T> {
@@ -403,6 +436,7 @@ export const api = {
   flows: (params: Params) => request<Page<Flow>>(`/events/flows${query(params)}`),
   dns: (params: Params) => request<Page<DnsEvent>>(`/events/dns${query(params)}`),
   blocks: (params: Params) => request<Page<BlockEvent>>(`/events/blocks${query(params)}`),
+  traffic: (params: Params) => request<Page<TrafficEvent>>(`/events/traffic${query(params)}`),
   streamTicket: () => request<{ ticket: string; expiresAt: string }>('/stream-ticket', { method: 'POST' }),
   asns: (params: Params) => request<AsnPage>(`/asns${query(params)}`),
   asnCountries: () => request<{ items: AsnCountry[] }>('/asns/countries'),
