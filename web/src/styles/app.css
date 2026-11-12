@@ -449,3 +449,22 @@ input[type="datetime-local"] { color-scheme: dark; }
 
 .filter-label { flex: none; color: var(--subtle); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
 .filter-input { flex: 1; min-width: 220px; font-size: 12px; }
+
+.filter-filter-button {
+  height: 30px; padding: 0 8px; text-align: left; cursor: pointer;
+  border: 1px solid var(--overlay); background: var(--base); color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.filter-filter-button:hover { border-color: var(--subtle); }
+.filter-guide { display: flex; flex-direction: column; gap: 5px; border-top: 1px solid var(--overlay); padding-top: 10px; }
+.filter-guide h3 {
+  margin-top: 6px; color: var(--subtle); font-size: 10px; line-height: 14px;
+  letter-spacing: .08em; text-transform: uppercase;
+}
+.filter-guide code, .filter-guide .mono { color: var(--text); }
+.filter-example {
+  text-align: left; padding: 5px 8px;
+  border: 1px solid var(--overlay); background: var(--base);
+  color: var(--text); font-size: 11px;
+}
+.filter-example:hover { border-color: var(--subtle); }

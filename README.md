@@ -253,11 +253,12 @@ live frames and Events can prepend new matching rows while its Live chip is on.
 
 The Events → Traffic filter builder is persisted in the browser (`localStorage`)
 across reloads: the date-time window, node, condition rows, match mode,
-exclude-local and live state. The builder also exposes a **Wireshark filter** input that accepts expressions
-such as `ip.dst == 8.8.8.8 && !domain contains "ads"` and mirrors them into the
-condition rows. Press Enter or Apply to parse it. Use one connector type per
-expression (`&&` or `||`); mixed connectors and parentheses are not supported by
-the row model.
+exclude-local and live state. The builder also exposes a **Wireshark filter** bar. Clicking it opens an
+expression editor with a short guide to the supported fields, operators,
+connectors and examples. Expressions such as
+`ip.dst == 8.8.8.8 && !domain contains "ads"` are parsed into the condition rows;
+press Enter or Apply. Use one connector type per expression (`&&` or `||`);
+mixed connectors and parentheses are not supported by the row model.
 
 Condition rows use Wireshark-style fields such as
 `text`, `ip.addr`, `ip.src`, `ip.dst`, `port`, `src.port`, `dst.port`, `protocol`,
