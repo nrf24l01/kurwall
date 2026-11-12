@@ -80,9 +80,9 @@ func New(ctx context.Context, cfg config.Config, logger zerolog.Logger) (*App, e
 	var asnCatalog *asn.Catalog
 	if cfg.ASN.Enabled {
 		asnResolver = asn.New(cfg.ASN.PrefixURLTemplate, cfg.ASN.HolderURLTemplate, cfg.ASN.RequestTimeout, cfg.ASN.MaxPrefixes, logger)
-		if cfg.ASN.CatalogEnabled {
-			asnCatalog = asn.NewCatalog(cfg.ASN.CatalogURL, cfg.ASN.CatalogTimeout, logger)
-		}
+	}
+	if cfg.ASN.CatalogEnabled {
+		asnCatalog = asn.NewCatalog(cfg.ASN.CatalogURL, cfg.ASN.CatalogTimeout, logger)
 	}
 	asnService := service.NewASN(pg, asnResolver, asnCatalog, hub, logger, service.ASNSettings{
 		Enabled: cfg.ASN.Enabled, TTL: cfg.ASN.RefreshInterval, Retry: cfg.ASN.RetryInterval,

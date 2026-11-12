@@ -130,6 +130,23 @@ type ASNEntry struct {
 	PrefixCount int    `json:"prefixCount"`
 }
 
+// ASNRange is one routed prefix range from the ASN catalog, used to map a
+// destination IP address to its ASN and country.
+type ASNRange struct {
+	StartIP string
+	EndIP   string
+	ASN     int64
+	Country string
+	Name    string
+}
+
+// ASNInfo is the ASN and country associated with an IP address.
+type ASNInfo struct {
+	ASN     int64  `json:"asn"`
+	Country string `json:"country"`
+	Name    string `json:"name"`
+}
+
 // ASNCountry is an ASN directory country facet.
 type ASNCountry struct {
 	Code  string `json:"code"`

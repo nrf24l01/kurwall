@@ -166,23 +166,35 @@ func (s *ASN) refreshCatalog(ctx context.Context) {
 		s.logger.Warn().Err(err).Msg("failed to read ASN catalog stats")
 		return
 	}
-	if stats.Count > 0 && stats.UpdatedAt != nil && time.Since(*stats.UpdatedAt) < s.settings.CatalogTTL {
+	rangeCount, err := s.repo.CountASNRanges(ctx)
+	if err != nil {
+		s.logger.Warn().Err(err).Msg("failed to count ASN ranges")
 		return
 	}
-	entries, err := s.catalog.Load(ctx)
+	if stats.Count > 0 && stats.UpdatedAt != nil && rangeCount > 0 && time.Since(*stats.UpdatedAt) < s.settings.CatalogTTL {
+		return
+	}
+	result, err := s.catalog.Load(ctx)
 	if err != nil {
 		s.logger.Warn().Err(err).Msg("ASN catalog refresh failed")
 		return
 	}
-	catalog := make([]domain.ASNEntry, 0, len(entries))
-	for _, entry := range entries {
-		catalog = append(catalog, domain.ASNEntry{ASN: entry.ASN, Name: entry.Name, Country: entry.Country})
+	entries := make([]domain.ASNEntry, 0, len(result.Entries))
+	for _, entry := range result.Entries {
+		entries = append(entries, domain.ASNEntry{ASN: entry.ASN, Name: entry.Name, Country: entry.Country})
 	}
-	if err := s.repo.ReplaceASNCatalog(ctx, catalog); err != nil {
+	ranges := make([]domain.ASNRange, 0, len(result.Ranges))
+	for _, r := range result.Ranges {
+		ranges = append(ranges, domain.ASNRange{
+			StartIP: r.Start.String(), EndIP: r.End.String(),
+			ASN: r.ASN, Country: r.Country, Name: r.Name,
+		})
+	}
+	if err := s.repo.ReplaceASNCatalog(ctx, entries, ranges); err != nil {
 		s.logger.Error().Err(err).Msg("failed to replace ASN catalog")
 		return
 	}
-	s.logger.Info().Int("asns", len(catalog)).Msg("ASN catalog updated")
+	s.logger.Info().Int("asns", len(entries)).Int("ranges", len(ranges)).Msg("ASN catalog updated")
 }
 
 // Cached returns the current cache entry without resolving.

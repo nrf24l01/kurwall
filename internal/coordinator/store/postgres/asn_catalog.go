@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -11,8 +13,9 @@ import (
 	"github.com/kurwall/kurwall/internal/platform/apperr"
 )
 
-// ReplaceASNCatalog atomically replaces the searchable ASN directory.
-func (s *Store) ReplaceASNCatalog(ctx context.Context, entries []domain.ASNEntry) error {
+// ReplaceASNCatalog atomically replaces the searchable ASN directory and the
+// address ranges used for destination lookup.
+func (s *Store) ReplaceASNCatalog(ctx context.Context, entries []domain.ASNEntry, ranges []domain.ASNRange) error {
 	if len(entries) == 0 {
 		return fmt.Errorf("refusing to replace the ASN catalog with an empty set")
 	}
@@ -22,7 +25,7 @@ func (s *Store) ReplaceASNCatalog(ctx context.Context, entries []domain.ASNEntry
 	}
 	defer tx.Rollback(ctx)
 
-	if _, err := tx.Exec(ctx, `TRUNCATE asn_catalog`); err != nil {
+	if _, err := tx.Exec(ctx, `TRUNCATE asn_catalog, asn_ranges`); err != nil {
 		return apperr.Internal("truncate asn catalog", err)
 	}
 	rows := make([][]any, 0, len(entries))
@@ -32,10 +35,95 @@ func (s *Store) ReplaceASNCatalog(ctx context.Context, entries []domain.ASNEntry
 	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"asn_catalog"}, []string{"asn", "name", "country"}, pgx.CopyFromRows(rows)); err != nil {
 		return apperr.Internal("copy asn catalog", err)
 	}
+	if len(ranges) > 0 {
+		rows = make([][]any, 0, len(ranges))
+		for _, r := range ranges {
+			start, err := netip.ParseAddr(r.StartIP)
+			if err != nil {
+				return fmt.Errorf("invalid ASN range start %q: %w", r.StartIP, err)
+			}
+			end, err := netip.ParseAddr(r.EndIP)
+			if err != nil {
+				return fmt.Errorf("invalid ASN range end %q: %w", r.EndIP, err)
+			}
+			rows = append(rows, []any{start, end, r.ASN, r.Country, r.Name})
+		}
+		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"asn_ranges"}, []string{"start_ip", "end_ip", "asn", "country", "name"}, pgx.CopyFromRows(rows)); err != nil {
+			return apperr.Internal("copy asn ranges", err)
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return apperr.Internal("commit asn catalog", err)
 	}
 	return nil
+}
+
+// CountASNRanges returns the number of rows in the address range table.
+func (s *Store) CountASNRanges(ctx context.Context) (int64, error) {
+	var count int64
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM asn_ranges`).Scan(&count); err != nil {
+		return 0, apperr.Internal("count asn ranges", err)
+	}
+	return count, nil
+}
+
+// LookupASNForIPs maps destination addresses to their ASN and country. Inputs
+// are normalized to unmapped form and unmatched addresses are omitted.
+func (s *Store) LookupASNForIPs(ctx context.Context, ips []string) (map[string]domain.ASNInfo, error) {
+	out := make(map[string]domain.ASNInfo, len(ips))
+	if len(ips) == 0 {
+		return out, nil
+	}
+	addrs := make([]netip.Addr, 0, len(ips))
+	seen := make(map[netip.Addr]struct{}, len(ips))
+	for _, raw := range ips {
+		addr, err := netip.ParseAddr(strings.TrimSpace(raw))
+		if err != nil {
+			continue
+		}
+		addr = addr.Unmap()
+		if _, ok := seen[addr]; ok {
+			continue
+		}
+		seen[addr] = struct{}{}
+		addrs = append(addrs, addr)
+	}
+	if len(addrs) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT host(ip), COALESCE(r.asn, 0), COALESCE(r.country, ''), COALESCE(r.name, '')
+		FROM unnest($1::inet[]) AS ip
+		LEFT JOIN LATERAL (
+			SELECT asn, country, name, end_ip
+			FROM asn_ranges
+			WHERE start_ip <= ip
+			ORDER BY start_ip DESC
+			LIMIT 1
+		) r ON r.end_ip >= ip`, addrs)
+	if err != nil {
+		return nil, apperr.Internal("lookup ASN for IPs", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ip string
+		var info domain.ASNInfo
+		if err := rows.Scan(&ip, &info.ASN, &info.Country, &info.Name); err != nil {
+			return nil, apperr.Internal("scan ASN lookup", err)
+		}
+		if info.ASN == 0 {
+			continue
+		}
+		addr, err := netip.ParseAddr(ip)
+		if err != nil {
+			return nil, apperr.Internal("normalize ASN lookup address", err)
+		}
+		out[addr.Unmap().String()] = info
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Internal("read ASN lookup", err)
+	}
+	return out, nil
 }
 
 // SearchASNCatalog filters by country and by name or ASN.

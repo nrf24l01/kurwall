@@ -35,10 +35,12 @@ type Repository interface {
 	DeleteRule(ctx context.Context, policyID, ruleID string) error
 
 	// ASN directory.
-	ReplaceASNCatalog(ctx context.Context, entries []ASNEntry) error
+	ReplaceASNCatalog(ctx context.Context, entries []ASNEntry, ranges []ASNRange) error
 	SearchASNCatalog(ctx context.Context, country, query string, limit, offset int) ([]ASNEntry, int64, error)
 	ASNCountries(ctx context.Context) ([]ASNCountry, error)
 	ASNCatalogStats(ctx context.Context) (ASNCatalogStats, error)
+	CountASNRanges(ctx context.Context) (int64, error)
+	LookupASNForIPs(ctx context.Context, ips []string) (map[string]ASNInfo, error)
 
 	// ASN prefix cache.
 	GetASNCache(ctx context.Context, asn int64) (ASNCache, bool, error)

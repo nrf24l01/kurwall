@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +22,22 @@ type CatalogEntry struct {
 	ASN     int64
 	Name    string
 	Country string
+}
+
+// CatalogRange is one routed prefix range from the ASN catalog. Both IPv4 and
+// IPv6 ranges are kept so destination addresses can be mapped to an ASN.
+type CatalogRange struct {
+	Start, End netip.Addr
+	ASN        int64
+	Country    string
+	Name       string
+}
+
+// CatalogResult is the parsed ASN catalog: the deduplicated directory entries
+// and every usable address range.
+type CatalogResult struct {
+	Entries []CatalogEntry
+	Ranges  []CatalogRange
 }
 
 // Catalog downloads and parses an ASN directory. The default URL is iptoasn's
@@ -40,27 +57,27 @@ func NewCatalog(url string, timeout time.Duration, logger zerolog.Logger) *Catal
 	return &Catalog{client: &http.Client{Timeout: timeout}, url: url, logger: logger}
 }
 
-// Load downloads the directory and returns unique ASNs.
-func (c *Catalog) Load(ctx context.Context) ([]CatalogEntry, error) {
+// Load downloads the directory and returns unique ASNs and their ranges.
+func (c *Catalog) Load(ctx context.Context) (CatalogResult, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("build ASN catalog request: %w", err)
+		return CatalogResult{}, fmt.Errorf("build ASN catalog request: %w", err)
 	}
 	req.Header.Set("User-Agent", "Kurwall/0.1 ASN catalog")
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("download ASN catalog: %w", err)
+		return CatalogResult{}, fmt.Errorf("download ASN catalog: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ASN catalog returned HTTP %d", resp.StatusCode)
+		return CatalogResult{}, fmt.Errorf("ASN catalog returned HTTP %d", resp.StatusCode)
 	}
 	var reader io.Reader = io.LimitReader(resp.Body, maxCatalogBytes)
 	buffered := bufio.NewReader(reader)
 	if magic, _ := buffered.Peek(2); len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
 		gz, err := gzip.NewReader(buffered)
 		if err != nil {
-			return nil, fmt.Errorf("open ASN catalog gzip: %w", err)
+			return CatalogResult{}, fmt.Errorf("open ASN catalog gzip: %w", err)
 		}
 		defer gz.Close()
 		reader = gz
@@ -71,6 +88,7 @@ func (c *Catalog) Load(ctx context.Context) ([]CatalogEntry, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	seen := map[int64]CatalogEntry{}
+	ranges := make([]CatalogRange, 0, 64*1024)
 	lines := 0
 	for scanner.Scan() {
 		lines++
@@ -94,19 +112,30 @@ func (c *Catalog) Load(ctx context.Context) ([]CatalogEntry, error) {
 			name = name[:300]
 		}
 		seen[int64(asn)] = CatalogEntry{ASN: int64(asn), Name: name, Country: country}
+
+		start, startErr := netip.ParseAddr(strings.TrimSpace(fields[0]))
+		end, endErr := netip.ParseAddr(strings.TrimSpace(fields[1]))
+		if startErr != nil || endErr != nil || !start.IsValid() || !end.IsValid() ||
+			start.IsUnspecified() || end.IsUnspecified() ||
+			start.Is4() != end.Is4() || end.Less(start) {
+			continue
+		}
+		ranges = append(ranges, CatalogRange{
+			Start: start, End: end, ASN: int64(asn), Country: country, Name: name,
+		})
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read ASN catalog: %w", err)
+		return CatalogResult{}, fmt.Errorf("read ASN catalog: %w", err)
 	}
 	if len(seen) == 0 {
-		return nil, fmt.Errorf("ASN catalog contained no usable entries")
+		return CatalogResult{}, fmt.Errorf("ASN catalog contained no usable entries")
 	}
-	out := make([]CatalogEntry, 0, len(seen))
+	entries := make([]CatalogEntry, 0, len(seen))
 	for _, entry := range seen {
-		out = append(out, entry)
+		entries = append(entries, entry)
 	}
-	c.logger.Info().Int("lines", lines).Int("asns", len(out)).Msg("ASN catalog parsed")
-	return out, nil
+	c.logger.Info().Int("lines", lines).Int("asns", len(entries)).Int("ranges", len(ranges)).Msg("ASN catalog parsed")
+	return CatalogResult{Entries: entries, Ranges: ranges}, nil
 }
 func isCountry(value string) bool {
 	for _, r := range value {

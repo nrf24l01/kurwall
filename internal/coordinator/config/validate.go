@@ -85,6 +85,14 @@ func Validate(cfg *Config) error {
 	if cfg.TLS.RequireClientCert && !cfg.TLS.Enabled {
 		problems = append(problems, "tls.require_client_cert requires tls.enabled")
 	}
+	if cfg.ASN.CatalogEnabled {
+		if cfg.ASN.CatalogURL == "" {
+			problems = append(problems, "asn.catalog_url is required when the ASN catalog is enabled")
+		}
+		if cfg.ASN.CatalogRefresh <= 0 || cfg.ASN.CatalogRetry <= 0 || cfg.ASN.CatalogTimeout <= 0 {
+			problems = append(problems, "asn catalog intervals must be positive")
+		}
+	}
 	if cfg.ASN.Enabled {
 		if cfg.ASN.PrefixURLTemplate == "" {
 			problems = append(problems, "asn.prefix_url_template is required when ASN resolution is enabled")
@@ -103,14 +111,6 @@ func Validate(cfg *Config) error {
 		}
 		if cfg.ASN.MaxPrefixes <= 0 {
 			problems = append(problems, "asn.max_prefixes must be positive")
-		}
-		if cfg.ASN.CatalogEnabled {
-			if cfg.ASN.CatalogURL == "" {
-				problems = append(problems, "asn.catalog_url is required when the ASN catalog is enabled")
-			}
-			if cfg.ASN.CatalogRefresh <= 0 || cfg.ASN.CatalogRetry <= 0 || cfg.ASN.CatalogTimeout <= 0 {
-				problems = append(problems, "asn catalog intervals must be positive")
-			}
 		}
 	}
 	if cfg.Auth.APIToken != "" && len(cfg.Auth.APIToken) < 16 {
