@@ -72,13 +72,13 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 }
 
 export type AuthRole = 'admin' | 'viewer'
-export type AuthMode = 'open' | 'token' | 'users' | 'unavailable'
+export type AuthMode = 'token' | 'users' | 'unavailable'
 
 export interface AuthUser {
   id: string
   username: string
   role: AuthRole
-  kind: 'open' | 'token' | 'session'
+  kind: 'token' | 'session'
 }
 
 export interface SessionInfo {

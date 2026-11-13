@@ -115,8 +115,8 @@ func RequestLog() echo.MiddlewareFunc {
 	}
 }
 
-// Auth requires a valid API token or browser session. The exact mode is
-// decided by the authenticator, which keeps an open coordinator open.
+// Auth requires a valid API token or browser session. There is no open mode;
+// an installation without accounts still requires a session.
 func Auth(authenticator Authenticator) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		if authenticator == nil {

@@ -8,11 +8,11 @@ import './style.css'
 router.beforeEach(async (to) => {
   await loadMeta()
   await ensureSession()
-  const mode = meta.value?.authMode ?? 'open'
+  const mode = meta.value?.authMode ?? 'users'
   if (to.meta.public) {
     return mode === 'users' && currentUser.value ? '/' : true
   }
-  if (mode === 'users' && !currentUser.value) {
+  if ((mode === 'users' || mode === 'unavailable') && !currentUser.value) {
     return { path: '/login', query: { next: to.fullPath } }
   }
   return true

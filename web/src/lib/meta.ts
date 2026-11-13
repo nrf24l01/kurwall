@@ -13,6 +13,7 @@ export interface Meta {
   agentVersion?: string
   agentDistAvailable?: boolean
   authMode?: AuthMode
+  setupRequired?: boolean
   enrollmentAvailable?: boolean
   agentSettings: {
     tlsInspectorPorts: number[]

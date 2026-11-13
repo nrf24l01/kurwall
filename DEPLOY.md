@@ -135,8 +135,9 @@ docker compose exec coordinator \
   kurwall users create-admin --username admin
 ```
 
-The command prompts for a password twice. Then open
-`http://SERVER_IP:8080` and sign in.
+The command prompts for a password twice. The dashboard is never open: before
+this account exists, `http://SERVER_IP:8080` shows the login page with the same
+command as a hint. After creating the account, sign in normally.
 
 Accounts are managed with the `users` subcommand:
 

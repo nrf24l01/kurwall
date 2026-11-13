@@ -165,9 +165,10 @@ These values are sent to agents in policy snapshots.
 |---|---|---|
 | `api_token` | empty | `KURWALL_API_TOKEN` |
 
-User accounts are stored in PostgreSQL and created with the `users` CLI. When
-any user exists, the dashboard requires a session. A configured API token
-remains an administrator bearer credential for automation.
+User accounts are stored in PostgreSQL and created with the `users` CLI. The
+dashboard always requires a session; there is no open mode. If no accounts exist,
+the login page shows the command for creating the first administrator. A
+configured API token remains an administrator bearer credential for automation.
 
 ### `ingest`
 

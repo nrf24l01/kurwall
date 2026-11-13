@@ -221,16 +221,21 @@ function onGlobalKey(event: KeyboardEvent) {
   }
 }
 
-watch(unauthorized, (value) => {
+watch(unauthorized, async (value) => {
   if (!value) return
-  if (meta.value?.authMode === 'users') {
+  // The cached mode may be stale after the first account was created.
+  // Re-read it before deciding between the login page and the token dialog.
+  const fresh = await loadMeta(true)
+  if (fresh) meta.value = fresh
+  const mode = fresh?.authMode ?? meta.value?.authMode ?? 'users'
+  if (mode === 'users') {
     stopShell()
     if (route.path !== '/login') {
-      void router.replace({ path: '/login', query: { next: route.fullPath } })
+      await router.replace({ path: '/login', query: { next: route.fullPath } })
     }
     return
   }
-  openToken()
+  if (mode === 'token') openToken()
 })
 watch(
   () => route.path,

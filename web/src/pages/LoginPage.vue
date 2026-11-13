@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { api, errorMessage } from '@/lib/api'
 import { unauthorized } from '@/lib/auth'
 import { currentUser } from '@/lib/session'
+import { meta } from '@/lib/meta'
 
 const route = useRoute()
 const router = useRouter()
@@ -77,6 +78,10 @@ onMounted(() => userInput.value?.focus())
       </div>
 
       <p v-if="insecure" class="err">This page is served over HTTP. Credentials are not encrypted in transit.</p>
+      <p v-if="meta?.setupRequired" class="field-hint">
+        No accounts exist yet. Create the first administrator on the server:
+        <code class="mono">docker compose exec coordinator kurwall users create-admin --username admin</code>
+      </p>
       <p v-if="error" class="err">{{ error }}</p>
 
       <button class="pc-btn pc-pri auth-submit" type="submit" :disabled="saving || !username.trim() || !password">

@@ -86,7 +86,7 @@ onMounted(checkHealth)
 
     <div class="areas grid-2">
       <section class="area">
-        <div class="pc-title"><h2>Access</h2><span class="area-title-note">{{ meta?.authMode ?? 'open' }} mode</span></div>
+        <div class="pc-title"><h2>Access</h2><span class="area-title-note">{{ meta?.authMode ?? 'users' }} mode</span></div>
         <div class="area-body">
           <div v-if="meta?.authMode === 'users'" class="stack">
             <dl class="kv">

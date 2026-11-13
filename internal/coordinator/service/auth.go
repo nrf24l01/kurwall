@@ -54,7 +54,8 @@ func NewAuth(repo AuthRepository, staticToken string, logger zerolog.Logger) *Au
 	}
 }
 
-// Mode reports how callers authenticate: users, token or open.
+// Mode reports how callers authenticate: users or token. An empty installation
+// still reports "users" so the dashboard cannot be used without an account.
 func (s *Auth) Mode(ctx context.Context) (string, error) {
 	count, err := s.repo.CountUsers(ctx)
 	if err != nil {
@@ -66,16 +67,20 @@ func (s *Auth) Mode(ctx context.Context) (string, error) {
 	if s.staticToken != "" {
 		return "token", nil
 	}
-	return "open", nil
+	return "users", nil
 }
 
-// Required reports whether unauthenticated callers are rejected.
-func (s *Auth) Required(ctx context.Context) (bool, error) {
-	mode, err := s.Mode(ctx)
-	if err != nil {
-		return true, err
+// SetupRequired reports whether the first administrator still has to be
+// created with the users CLI.
+func (s *Auth) SetupRequired(ctx context.Context) (bool, error) {
+	if s.staticToken != "" {
+		return false, nil
 	}
-	return mode != "open", nil
+	count, err := s.repo.CountUsers(ctx)
+	if err != nil {
+		return false, err
+	}
+	return count == 0, nil
 }
 
 // Authenticate resolves a bearer token or session cookie.
@@ -97,14 +102,7 @@ func (s *Auth) Authenticate(ctx context.Context, bearer, sessionToken string) (a
 			}, nil
 		}
 	}
-	required, err := s.Required(ctx)
-	if err != nil {
-		return auth.Identity{}, err
-	}
-	if required {
-		return auth.Identity{}, auth.ErrUnauthorized
-	}
-	return auth.Identity{Username: "operator", Role: auth.RoleAdmin, Kind: auth.KindOpen}, nil
+	return auth.Identity{}, auth.ErrUnauthorized
 }
 
 // CheckCSRF verifies the double-submitted token for cookie sessions.

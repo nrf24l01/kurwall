@@ -19,7 +19,6 @@ const (
 	RoleAdmin  = "admin"
 	RoleViewer = "viewer"
 
-	KindOpen    = "open"
 	KindToken   = "token"
 	KindSession = "session"
 

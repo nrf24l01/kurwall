@@ -90,8 +90,9 @@ docker compose -f compose.dev.yml exec coordinator \
   kurwall users create-admin --username admin
 ```
 
-The dashboard is served by the coordinator at `http://127.0.0.1:8080` and asks
-for a sign-in as soon as any user account exists. Accounts are managed with
+The dashboard is served by the coordinator at `http://127.0.0.1:8080` and always
+requires a sign-in. With no accounts yet, the login page shows the command for
+creating the first administrator. Accounts are managed with
 `docker compose exec coordinator kurwall users ...`:
 `create-admin`, `create` (viewer), `list`, `reset-password`, `disable` and
 `enable`. Passwords must be at least 12 characters.

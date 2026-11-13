@@ -39,20 +39,25 @@ func (h *Handler) Meta(c echo.Context) error {
 	base, _ := h.deployBaseURL(c)
 	grpcAddr, _ := h.deployGRPCAddr(c)
 	agentVersion, agentAvailable := h.agentDistribution()
-	mode := "open"
+	mode := "users"
+	setupRequired := false
 	if h.Auth != nil {
 		if current, err := h.Auth.Mode(c.Request().Context()); err == nil {
 			mode = current
 		} else {
 			mode = "unavailable"
 		}
+		if required, err := h.Auth.SetupRequired(c.Request().Context()); err == nil {
+			setupRequired = required
+		}
 	}
 	return response.OK(c, map[string]any{
 		"version":                 h.Version,
 		"agentSettings":           h.Settings,
 		"clickhouseRetentionDays": 30,
-		"authRequired":            mode != "open",
+		"authRequired":            true,
 		"authMode":                mode,
+		"setupRequired":           setupRequired,
 		"enrollmentAvailable":     h.Deploy != nil && h.Deploy.Enabled(),
 		"publicUrl":               base,
 		"grpcPublicAddr":          grpcAddr,

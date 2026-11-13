@@ -51,7 +51,7 @@ func (h *Handler) Me(c echo.Context) error {
 	if !ok {
 		return response.Error(c, apperr.New("UNAUTHORIZED", http.StatusUnauthorized, "authentication required"))
 	}
-	mode := "open"
+	mode := "users"
 	if h.Auth != nil {
 		if current, err := h.Auth.Mode(c.Request().Context()); err == nil {
 			mode = current
