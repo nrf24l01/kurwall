@@ -9,8 +9,13 @@ server:
   # KURWALL_PUBLIC_URL to the address nodes can reach.
   public_url: "http://localhost:8080"
   # Address agents dial. Empty derives the host from public_url and the port
-  # from grpc_addr. Set KURWALL_GRPC_PUBLIC_ADDR when gRPC is on another host.
+  # from grpc_addr. Set KURWALL_GRPC_PUBLIC_ADDR to use a different external
+  # host or port for gRPC than public_url (for example grpc.example.com:9090).
   grpc_public_addr: ""
+  # TLS server name agents verify for the gRPC endpoint. Keep the default when
+  # the coordinator certificate is used; set the external hostname when a proxy
+  # serves gRPC with a certificate issued for a different name.
+  grpc_server_name: "kurwall-coordinator"
   # Directory served at /agent for the install script and update assets.
   agent_dist_dir: "/app/agent-dist"
   # Persistent directory for the node enrollment CA (generated on first start).

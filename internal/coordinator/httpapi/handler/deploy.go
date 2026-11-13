@@ -31,9 +31,10 @@ var installScriptSource string
 var installScript = template.Must(template.New("install").Parse(installScriptSource))
 
 type installData struct {
-	BaseURL   string
-	GRPCAddr  string
-	DeployKey string
+	BaseURL        string
+	GRPCAddr       string
+	GRPCServerName string
+	DeployKey      string
 }
 
 // deployBaseURL returns the public HTTP origin nodes use for installation and
@@ -89,6 +90,13 @@ func (h *Handler) deployGRPCAddr(c echo.Context) (string, error) {
 	return net.JoinHostPort(host, port), nil
 }
 
+func (h *Handler) grpcServerName() string {
+	if h.GRPCServerName != "" {
+		return h.GRPCServerName
+	}
+	return "kurwall-coordinator"
+}
+
 func firstForwarded(c echo.Context, header string) string {
 	value := c.Request().Header.Get(header)
 	if value == "" {
@@ -142,7 +150,12 @@ func (h *Handler) InstallScript(c echo.Context) error {
 	c.Response().Header().Set(echo.HeaderContentType, "text/x-shellscript; charset=utf-8")
 	c.Response().Header().Set("Cache-Control", "no-store")
 	c.Response().Header().Set("Content-Disposition", `inline; filename="install.sh"`)
-	return installScript.Execute(c.Response(), installData{BaseURL: base, GRPCAddr: grpcAddr, DeployKey: deployKey})
+	return installScript.Execute(c.Response(), installData{
+		BaseURL:        base,
+		GRPCAddr:       grpcAddr,
+		GRPCServerName: h.grpcServerName(),
+		DeployKey:      deployKey,
+	})
 }
 
 // AgentAsset serves the public installer assets (binaries, unit files, CA and

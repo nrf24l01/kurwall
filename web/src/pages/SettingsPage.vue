@@ -141,10 +141,12 @@ onMounted(checkHealth)
             <dd><StatusMark :state="meta ? 'ok' : 'broken'" :word="meta ? 'online' : 'unavailable'" /></dd>
             <dt>Version</dt>
             <dd class="mono">{{ meta?.version ?? '—' }}</dd>
-            <dt>Public URL</dt>
+            <dt>Web public URL</dt>
             <dd class="mono">{{ meta?.publicUrl ?? '—' }}</dd>
             <dt>gRPC address</dt>
             <dd class="mono">{{ meta?.grpcPublicAddr ?? '—' }}</dd>
+            <dt>gRPC server name</dt>
+            <dd class="mono">{{ meta?.grpcServerName ?? '—' }}</dd>
             <dt>Node enrollment</dt>
             <dd>
               <StatusMark

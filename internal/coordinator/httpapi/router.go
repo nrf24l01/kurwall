@@ -35,6 +35,7 @@ type Deps struct {
 	APIToken       string
 	PublicURL      string
 	GRPCPublicAddr string
+	GRPCServerName string
 	GRPCAddr       string
 	AgentDistDir   string
 	Logger         zerolog.Logger
@@ -71,6 +72,7 @@ func New(d Deps) *echo.Echo {
 	h.DBHealth = d.DBHealth
 	h.PublicURL = d.PublicURL
 	h.GRPCPublicAddr = d.GRPCPublicAddr
+	h.GRPCServerName = d.GRPCServerName
 	h.GRPCAddr = d.GRPCAddr
 	h.AgentDistDir = d.AgentDistDir
 

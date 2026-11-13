@@ -34,6 +34,9 @@ func Validate(cfg *Config) error {
 			problems = append(problems, "server.grpc_public_addr: "+err.Error())
 		}
 	}
+	if err := validateServerName(cfg.Server.GRPCServerName); err != nil {
+		problems = append(problems, "server.grpc_server_name: "+err.Error())
+	}
 	if cfg.Postgres.Host == "" || cfg.Postgres.Database == "" || cfg.Postgres.User == "" {
 		problems = append(problems, "postgres.host, postgres.database and postgres.user are required")
 	}
@@ -140,6 +143,37 @@ func validatePublicURL(raw string) error {
 	}
 	if parsed.User != nil {
 		return fmt.Errorf("must not include credentials")
+	}
+	return nil
+}
+
+// validateServerName accepts the TLS server name agents use for the gRPC
+// connection. It must be a bare hostname or IP address, never a URL or host:port.
+func validateServerName(raw string) error {
+	if raw == "" {
+		return fmt.Errorf("is required")
+	}
+	if strings.ContainsAny(raw, "'\"`$\\/ \n\r\t") {
+		return fmt.Errorf("must not contain quotes, backticks, dollar signs, backslashes, slashes or whitespace")
+	}
+	if net.ParseIP(raw) != nil {
+		return nil
+	}
+	if strings.Contains(raw, ":") {
+		return fmt.Errorf("must be a hostname without a port")
+	}
+	if len(raw) > 253 {
+		return fmt.Errorf("is too long")
+	}
+	for _, label := range strings.Split(raw, ".") {
+		if label == "" || len(label) > 63 {
+			return fmt.Errorf("is not a valid hostname")
+		}
+		for _, r := range label {
+			if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' {
+				return fmt.Errorf("is not a valid hostname")
+			}
+		}
 	}
 	return nil
 }

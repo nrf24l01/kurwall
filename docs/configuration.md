@@ -25,6 +25,7 @@ Durations use Go duration syntax: `500ms`, `30s`, `5m`, `12h`, `168h`.
 | `web_static_dir` | `./web/dist` | `KURWALL_WEB_STATIC_DIR` | Container uses `/app/web` |
 | `public_url` | empty (example: `http://localhost:8080`) | `KURWALL_PUBLIC_URL` | Public HTTP origin used in install links and cookies |
 | `grpc_public_addr` | empty | `KURWALL_GRPC_PUBLIC_ADDR` | Address agents dial; derived from `public_url` and the gRPC port when empty |
+| `grpc_server_name` | `kurwall-coordinator` | `KURWALL_GRPC_SERVER_NAME` | TLS name agents verify for gRPC |
 | `agent_dist_dir` | `./agent-dist` | `KURWALL_AGENT_DIST_DIR` | Directory served at `/agent`; container uses `/app/agent-dist` |
 | `enrollment_dir` | `/var/lib/kurwall/enrollment` | `KURWALL_ENROLLMENT_DIR` | Persistent enrollment CA directory |
 | `read_timeout` | `30s` | — | HTTP read timeout |
@@ -33,6 +34,40 @@ Durations use Go duration syntax: `500ms`, `30s`, `5m`, `12h`, `168h`.
 `public_url` should be the HTTPS origin users and nodes can reach, for example
 `https://kurwall.example.com`. Setting it to HTTPS also marks session cookies
 `Secure` (when the reverse proxy forwards `X-Forwarded-Proto: https`).
+
+### Separate web and gRPC endpoints
+
+The dashboard/API and the agent gRPC listener can use different external hosts.
+Only the coordinator's internal listen addresses are coupled; the advertised
+addresses are not.
+
+```yaml
+server:
+  public_url: "https://panel.example.com"       # dashboard, install links
+  grpc_public_addr: "grpc.example.com:9090"     # address agents dial
+  grpc_server_name: "kurwall-coordinator"       # TLS name agents verify
+```
+
+- `public_url` is used for browser cookies, install links and agent asset URLs.
+- `grpc_public_addr` is embedded in the installer as `coordinator_addr`.
+- `grpc_server_name` is embedded as `tls.server_name`. Keep
+  `kurwall-coordinator` when the coordinator's own certificate is used. Set it
+  to the external name when a TCP proxy/load balancer serves gRPC with a
+  certificate issued for that name.
+- If the coordinator terminates TLS itself, its certificate must cover
+  `grpc_server_name`. Add it to `COORDINATOR_SAN` when running
+  `deploy/scripts/gen-certs.sh`.
+- gRPC must reach the coordinator as TLS, not through an HTTP reverse proxy.
+  Use a TCP/SNI passthrough or expose the gRPC port directly.
+
+The dashboard's **Settings → Dependencies** panel shows the resolved public URL
+and gRPC address, which makes a mismatch easy to spot after deployment.
+
+Changing these values affects **new installs**. Existing agents keep the
+`coordinator_addr` and `tls.server_name` already written to
+`/etc/kurwall/agent.yaml`. To move them, edit that file and restart
+`kurwall-agent`, or re-run the installer with `--force` (which rewrites the
+generated configuration).
 
 ### `postgres`
 
@@ -265,7 +300,8 @@ you protect the port.
 | `KURWALL_GRPC_BIND_ADDR` | `0.0.0.0` | Host address for published 9090 |
 | `KURWALL_BIND_ADDR` | unset | Legacy fallback used for both ports when the two above are unset |
 | `KURWALL_PUBLIC_URL` | dev `http://localhost:8080` | Install links, cookies |
-| `KURWALL_GRPC_PUBLIC_ADDR` | derived | Address agents dial |
+| `KURWALL_GRPC_PUBLIC_ADDR` | derived | Address agents dial; may use a different host than `KURWALL_PUBLIC_URL` |
+| `KURWALL_GRPC_SERVER_NAME` | `kurwall-coordinator` | TLS name agents verify for gRPC |
 | `KURWALL_AGENT_DIST_DIR` | `./agent-dist` | Host directory mounted at `/app/agent-dist` (prod compose) |
 | `KURWALL_COORDINATOR_IMAGE` | `ghcr.io/nrf24l01/kurwall/coordinator:latest` | Prod compose image |
 | `KURWALL_ASN_CATALOG_URL` | empty (iptoasn default) | Optional catalog mirror |
@@ -375,7 +411,8 @@ KURWALL_API_TOKEN=
 KURWALL_HTTP_BIND_ADDR=127.0.0.1
 KURWALL_GRPC_BIND_ADDR=0.0.0.0
 KURWALL_PUBLIC_URL=https://kurwall.example.com
-KURWALL_GRPC_PUBLIC_ADDR=kurwall.example.com:9090
+KURWALL_GRPC_PUBLIC_ADDR=grpc.kurwall.example.com:9090
+KURWALL_GRPC_SERVER_NAME=kurwall-coordinator
 KURWALL_AGENT_DIST_DIR=./agent-dist
 KURWALL_COORDINATOR_IMAGE=ghcr.io/nrf24l01/kurwall/coordinator:latest
 # Optional catalog mirror if iptoasn is slow:
@@ -387,7 +424,8 @@ Coordinator server/TLS essentials:
 ```yaml
 server:
   public_url: "https://kurwall.example.com"
-  grpc_public_addr: "kurwall.example.com:9090"
+  grpc_public_addr: "grpc.kurwall.example.com:9090"
+  grpc_server_name: "kurwall-coordinator"
   agent_dist_dir: "/app/agent-dist"
   enrollment_dir: "/var/lib/kurwall/enrollment"
 

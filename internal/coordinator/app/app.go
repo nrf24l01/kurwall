@@ -151,7 +151,7 @@ func New(ctx context.Context, cfg config.Config, logger zerolog.Logger) (*App, e
 		Auth: authService, Deploy: deployService, Version: version.Version,
 		Settings: settings, WebStaticDir: cfg.Server.WebStaticDir, APIToken: cfg.Auth.APIToken,
 		PublicURL: cfg.Server.PublicURL, GRPCPublicAddr: cfg.Server.GRPCPublicAddr,
-		GRPCAddr: cfg.Server.GRPCAddr, AgentDistDir: cfg.Server.AgentDistDir,
+		GRPCServerName: cfg.Server.GRPCServerName, GRPCAddr: cfg.Server.GRPCAddr, AgentDistDir: cfg.Server.AgentDistDir,
 		DBHealth: pg.Health, Logger: logger,
 	})
 	httpSrv := &http.Server{

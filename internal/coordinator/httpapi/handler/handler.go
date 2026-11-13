@@ -33,6 +33,7 @@ type Handler struct {
 	DBHealth       func(ctx context.Context) error
 	PublicURL      string
 	GRPCPublicAddr string
+	GRPCServerName string
 	GRPCAddr       string
 	AgentDistDir   string
 }

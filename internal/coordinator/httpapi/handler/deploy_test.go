@@ -1,6 +1,13 @@
 package handler
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/labstack/echo/v4"
+)
 
 func TestAllowedAgentAsset(t *testing.T) {
 	allowed := []string{
@@ -32,5 +39,43 @@ func TestSafeDeployURL(t *testing.T) {
 		if safeDeployURL(value) {
 			t.Fatalf("expected %q to be rejected", value)
 		}
+	}
+}
+
+func installScriptBody(t *testing.T, h *Handler) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/install.sh", nil)
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(req, rec)
+	if err := h.InstallScript(c); err != nil {
+		t.Fatalf("InstallScript: %v", err)
+	}
+	return rec.Body.String()
+}
+
+func TestInstallScriptUsesSeparateWebAndGRPCHosts(t *testing.T) {
+	body := installScriptBody(t, &Handler{
+		PublicURL:      "https://panel.example.com",
+		GRPCPublicAddr: "grpc.example.com:9090",
+		GRPCServerName: "grpc.example.com",
+	})
+	for _, want := range []string{
+		"BASE_URL='https://panel.example.com'",
+		"COORDINATOR_ADDR='grpc.example.com:9090'",
+		`server_name: "grpc.example.com"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("install script missing %q", want)
+		}
+	}
+}
+
+func TestInstallScriptDefaultsGRPCServerName(t *testing.T) {
+	body := installScriptBody(t, &Handler{
+		PublicURL:      "https://panel.example.com",
+		GRPCPublicAddr: "grpc.example.com:9090",
+	})
+	if !strings.Contains(body, `server_name: "kurwall-coordinator"`) {
+		t.Fatal("install script did not default the gRPC server name")
 	}
 }

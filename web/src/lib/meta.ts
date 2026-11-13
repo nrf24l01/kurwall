@@ -7,6 +7,7 @@ export interface Meta {
   authRequired: boolean
   publicUrl?: string
   grpcPublicAddr?: string
+  grpcServerName?: string
   agentInstallUrl?: string
   agentManifestUrl?: string
   agentVersion?: string

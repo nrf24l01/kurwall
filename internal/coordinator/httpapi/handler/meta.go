@@ -56,6 +56,7 @@ func (h *Handler) Meta(c echo.Context) error {
 		"enrollmentAvailable":     h.Deploy != nil && h.Deploy.Enabled(),
 		"publicUrl":               base,
 		"grpcPublicAddr":          grpcAddr,
+		"grpcServerName":          h.grpcServerName(),
 		"agentInstallUrl":         base + "/install.sh",
 		"agentManifestUrl":        base + "/agent/manifest.json",
 		"agentVersion":            agentVersion,

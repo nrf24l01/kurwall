@@ -164,7 +164,8 @@ CLICKHOUSE_PASSWORD=replace-with-a-long-random-password
 KURWALL_HTTP_BIND_ADDR=127.0.0.1
 KURWALL_GRPC_BIND_ADDR=0.0.0.0
 KURWALL_PUBLIC_URL=https://kurwall.example.com
-KURWALL_GRPC_PUBLIC_ADDR=kurwall.example.com:9090
+KURWALL_GRPC_PUBLIC_ADDR=grpc.kurwall.example.com:9090
+KURWALL_GRPC_SERVER_NAME=kurwall-coordinator
 KURWALL_AGENT_DIST_DIR=./agent-dist
 KURWALL_COORDINATOR_IMAGE=ghcr.io/nrf24l01/kurwall/coordinator:latest
 ```
@@ -373,6 +374,24 @@ strictly and environment variables override deployment values.
 Coordinator secrets: `POSTGRES_PASSWORD`, `CLICKHOUSE_PASSWORD`,
 `KURWALL_API_TOKEN`, TLS file paths.
 
+The dashboard/API and agent gRPC endpoints can use different external hosts:
+
+```yaml
+server:
+  public_url: "https://panel.example.com"       # dashboard + install links
+  grpc_public_addr: "grpc.example.com:9090"     # address agents dial
+  grpc_server_name: "kurwall-coordinator"       # TLS name agents verify
+```
+
+Set `grpc_public_addr` when agents should dial a different host or port than
+`public_url`. Keep the default `grpc_server_name` when using the coordinator
+certificate; set the external hostname when a TCP proxy presents a certificate
+for that name. The gRPC listener is TLS, so terminate or pass it through as TCP,
+not through an HTTP reverse proxy. Existing agents keep their generated
+`coordinator_addr`; change `/etc/kurwall/agent.yaml` or reinstall with
+`--force` to move them. See
+[docs/configuration.md](docs/configuration.md#separate-web-and-grpc-endpoints).
+
 Agent secrets/overrides: `KURWALL_COORDINATOR_ADDR`, `KURWALL_NODE_ID`,
 `KURWALL_SQLITE_PATH`, `KURWALL_TLS_*`, `KURWALL_METRICS_ADDR`.
 
@@ -380,10 +399,11 @@ Node deployment configuration (`server` in `coordinator.yaml`):
 
 ```yaml
 server:
-  public_url: "https://kurwall.example.com"   # KURWALL_PUBLIC_URL
-  grpc_public_addr: "kurwall.example.com:9090" # optional, derived otherwise
-  agent_dist_dir: "/app/agent-dist"            # KURWALL_AGENT_DIST_DIR
-  enrollment_dir: "/var/lib/kurwall/enrollment" # KURWALL_ENROLLMENT_DIR
+  public_url: "https://kurwall.example.com"          # KURWALL_PUBLIC_URL
+  grpc_public_addr: "grpc.kurwall.example.com:9090"  # KURWALL_GRPC_PUBLIC_ADDR
+  grpc_server_name: "kurwall-coordinator"            # KURWALL_GRPC_SERVER_NAME
+  agent_dist_dir: "/app/agent-dist"                  # KURWALL_AGENT_DIST_DIR
+  enrollment_dir: "/var/lib/kurwall/enrollment"      # KURWALL_ENROLLMENT_DIR
 ```
 
 The enrollment CA is generated on first start inside `enrollment_dir` and is

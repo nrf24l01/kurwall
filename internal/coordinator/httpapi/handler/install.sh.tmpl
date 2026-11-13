@@ -227,7 +227,7 @@ tls:
   ca_file: /etc/kurwall/tls/ca.crt
   cert_file: /etc/kurwall/tls/agent.crt
   key_file: /etc/kurwall/tls/agent.key
-  server_name: "kurwall-coordinator"
+  server_name: "{{.GRPCServerName}}"
 
 state:
   sqlite_path: /var/lib/kurwall/agent.db

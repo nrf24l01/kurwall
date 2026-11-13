@@ -54,3 +54,29 @@ func TestValidatePublicAddr(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateServerName(t *testing.T) {
+	cases := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{name: "hostname", value: "grpc.example.com"},
+		{name: "short name", value: "kurwall-coordinator"},
+		{name: "ipv4", value: "192.0.2.10"},
+		{name: "ipv6", value: "2001:db8::1"},
+		{name: "empty", value: "", wantErr: true},
+		{name: "with port", value: "grpc.example.com:9090", wantErr: true},
+		{name: "url", value: "https://grpc.example.com", wantErr: true},
+		{name: "space", value: "grpc example.com", wantErr: true},
+		{name: "quote", value: "grpc.example.com'", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateServerName(tc.value)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("validateServerName(%q) error = %v, wantErr %v", tc.value, err, tc.wantErr)
+			}
+		})
+	}
+}

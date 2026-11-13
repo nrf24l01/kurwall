@@ -30,6 +30,7 @@ type ServerConfig struct {
 	WebStaticDir   string        `yaml:"web_static_dir"`
 	PublicURL      string        `yaml:"public_url"`
 	GRPCPublicAddr string        `yaml:"grpc_public_addr"`
+	GRPCServerName string        `yaml:"grpc_server_name"`
 	AgentDistDir   string        `yaml:"agent_dist_dir"`
 	EnrollmentDir  string        `yaml:"enrollment_dir"`
 	ReadTimeout    time.Duration `yaml:"read_timeout"`
@@ -112,13 +113,14 @@ type LogConfig struct {
 func Default() Config {
 	return Config{
 		Server: ServerConfig{
-			HTTPAddr:      ":8080",
-			GRPCAddr:      ":9090",
-			WebStaticDir:  "./web/dist",
-			AgentDistDir:  "./agent-dist",
-			EnrollmentDir: "/var/lib/kurwall/enrollment",
-			ReadTimeout:   30 * time.Second,
-			IdleTimeout:   120 * time.Second,
+			HTTPAddr:       ":8080",
+			GRPCAddr:       ":9090",
+			WebStaticDir:   "./web/dist",
+			AgentDistDir:   "./agent-dist",
+			EnrollmentDir:  "/var/lib/kurwall/enrollment",
+			GRPCServerName: "kurwall-coordinator",
+			ReadTimeout:    30 * time.Second,
+			IdleTimeout:    120 * time.Second,
 		},
 		Postgres: PostgresConfig{
 			Host:             "127.0.0.1",
@@ -210,6 +212,7 @@ func applyEnv(cfg *Config) {
 	setString(&cfg.Server.WebStaticDir, "KURWALL_WEB_STATIC_DIR")
 	setString(&cfg.Server.PublicURL, "KURWALL_PUBLIC_URL")
 	setString(&cfg.Server.GRPCPublicAddr, "KURWALL_GRPC_PUBLIC_ADDR")
+	setString(&cfg.Server.GRPCServerName, "KURWALL_GRPC_SERVER_NAME")
 	setString(&cfg.Server.AgentDistDir, "KURWALL_AGENT_DIST_DIR")
 	setString(&cfg.Server.EnrollmentDir, "KURWALL_ENROLLMENT_DIR")
 
