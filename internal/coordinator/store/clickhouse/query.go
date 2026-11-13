@@ -364,10 +364,8 @@ func trafficBranches(decision string) (flows, blocks bool) {
 	}
 }
 
-// trafficWhere builds the filters shared by the traffic counts and branches.
 // localTrafficPredicate matches private, loopback, link-local, CGNAT,
-// multicast and unspecified addresses in either address family. Traffic is
-// considered local when both endpoints match.
+// multicast and unspecified addresses in either address family.
 func localTrafficPredicate(column string) string {
 	prefixes := []string{
 		"::ffff:0.0.0.0/104",
@@ -392,6 +390,7 @@ func localTrafficPredicate(column string) string {
 	return "(" + strings.Join(parts, " OR ") + ")"
 }
 
+// trafficWhere builds the filters shared by the traffic counts and branches.
 func trafficWhere(q domain.TrafficQuery, flows bool) (*where, error) {
 	w := &where{}
 	if flows {
@@ -402,8 +401,11 @@ func trafficWhere(q domain.TrafficQuery, flows bool) (*where, error) {
 		w.add("block_events.at >= ?", q.From)
 		w.add("block_events.at <= ?", q.To)
 	}
+	// ExcludeLocal hides events delivered to the local/private network by
+	// checking the destination only. Private or container sources to public
+	// destinations are legitimate egress and stay visible.
 	if q.ExcludeLocal {
-		w.add("NOT (" + localTrafficPredicate("src_ip") + " AND " + localTrafficPredicate("dst_ip") + ")")
+		w.add("NOT " + localTrafficPredicate("dst_ip"))
 	}
 	if q.NodeID != "" {
 		w.add("node_id = ?", q.NodeID)

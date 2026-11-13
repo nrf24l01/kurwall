@@ -208,13 +208,16 @@ type TrafficCondition struct {
 
 // TrafficQuery filters the unified traffic history.
 type TrafficQuery struct {
-	NodeID       string
-	SrcIP        string
-	DstIP        string
-	IP           string
-	Domain       string
-	Container    string
-	Decision     string
+	NodeID    string
+	SrcIP     string
+	DstIP     string
+	IP        string
+	Domain    string
+	Container string
+	Decision  string
+	// ExcludeLocal hides events whose destination is a local, private,
+	// CGNAT, link-local or multicast address. Private or container sources
+	// to public destinations remain visible.
 	ExcludeLocal bool
 	Match        string
 	Conditions   []TrafficCondition

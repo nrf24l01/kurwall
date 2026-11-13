@@ -771,7 +771,7 @@ onBeforeUnmount(() => {
         class="pc-chip"
         type="button"
         :aria-pressed="excludeLocal"
-        title="Hide events where both source and destination are local, private, CGNAT, link-local or multicast"
+        title="Hide events whose destination is a local, private, CGNAT, link-local or multicast address; private sources to public destinations stay visible"
         @click="excludeLocal = !excludeLocal"
       >
         {{ excludeLocal ? 'Local hidden' : 'Exclude local' }}

@@ -136,15 +136,29 @@ one-time deploy keys. The gRPC listener trusts both CAs.
 ranges and Traffic ASN/country labels) loads when `catalog_enabled` is true,
 even if rule resolution is disabled.
 
-If iptoasn is unreachable or too slow from your network, point
-`KURWALL_ASN_CATALOG_URL` at a mirror. A current mirror used during testing:
+The catalog defaults to the official iptoasn combined feed. If that host is
+unreachable or too slow from your network, set `KURWALL_ASN_CATALOG_URL` to an
+iptoasn-compatible mirror (same five-column TSV) that you have verified is
+downloadable from the coordinator host. The coordinator downloads the whole
+feed within `catalog_timeout` (90s by default) and retries at
+`catalog_retry_interval` (5m) until a load succeeds.
 
-```
-http://www.db.mirror.stargrave.org/ip/ip2asn-combined.tsv.gz
+ASN and country labels in Events are resolved at read time from the
+`asn_ranges` table, so the catalog must complete one successful load before the
+labels appear; destinations with no match (private, local or unannounced
+addresses) show `—`. Catalog download/parse failures and per-request lookup
+failures are best-effort and never block event ingestion or the Events page.
+
+To inspect the catalog state:
+
+```bash
+docker compose logs coordinator | grep -E 'ASN catalog|failed to look up ASN'
 ```
 
-The mirror is third-party display data and is not authenticated; prefer HTTPS
-where available.
+A successful load logs `ASN catalog updated` with a nonzero `ranges`. A warning
+such as `ASN catalog refresh failed` (for example `read ASN catalog: context
+deadline exceeded` while reading the body) means the configured URL did not
+finish downloading from that host.
 
 ### `agent` (published agent settings)
 
@@ -418,8 +432,10 @@ KURWALL_GRPC_PUBLIC_ADDR=grpc.kurwall.example.com:9090
 KURWALL_GRPC_SERVER_NAME=kurwall-coordinator
 KURWALL_TLS_SAN=DNS:kurwall-coordinator,DNS:localhost,IP:127.0.0.1,IP:192.0.2.10
 KURWALL_COORDINATOR_IMAGE=ghcr.io/nrf24l01/kurwall/coordinator:latest
-# Optional catalog mirror if iptoasn is slow:
-# KURWALL_ASN_CATALOG_URL=http://www.db.mirror.stargrave.org/ip/ip2asn-combined.tsv.gz
+# Optional iptoasn-compatible catalog mirror. Verify the URL is reachable from
+# the coordinator host before relying on it; ASN/country labels appear only
+# after the catalog loads, and catalog failures never block event ingestion.
+# KURWALL_ASN_CATALOG_URL=https://mirror.example.com/ip2asn-combined.tsv.gz
 ```
 
 Coordinator server/TLS essentials:

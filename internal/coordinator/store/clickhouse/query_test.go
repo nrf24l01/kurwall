@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
@@ -181,9 +182,9 @@ func TestBuildTrafficQueryExcludeLocal(t *testing.T) {
 	}
 	for _, fragment := range []string{
 		"NOT (",
-		"isIPAddressInRange(src_ip, '::ffff:10.0.0.0/104')",
-		"isIPAddressInRange(src_ip, '::ffff:100.64.0.0/106')",
-		"isIPAddressInRange(src_ip, '::ffff:192.168.0.0/112')",
+		"isIPAddressInRange(dst_ip, '::ffff:10.0.0.0/104')",
+		"isIPAddressInRange(dst_ip, '::ffff:100.64.0.0/106')",
+		"isIPAddressInRange(dst_ip, '::ffff:192.168.0.0/112')",
 		"isIPAddressInRange(dst_ip, 'fc00::/7')",
 		"isIPAddressInRange(dst_ip, 'fe80::/10')",
 		"isIPAddressInRange(dst_ip, 'ff00::/8')",
@@ -192,6 +193,13 @@ func TestBuildTrafficQueryExcludeLocal(t *testing.T) {
 			t.Fatalf("excludeLocal query is missing %q:\n%s", fragment, query)
 		}
 	}
+	// The filter applies to the destination only, in both union branches.
+	if got := strings.Count(query, "NOT (isIPAddressInRange(dst_ip,"); got != 2 {
+		t.Fatalf("destination predicate appears %d times, want once per branch:\n%s", got, query)
+	}
+	if strings.Contains(query, "isIPAddressInRange(src_ip") {
+		t.Fatalf("excludeLocal must not filter on the source address:\n%s", query)
+	}
 
 	without, _, err := buildTrafficQuery(domain.TrafficQuery{From: from, To: to}, true, true)
 	if err != nil {
@@ -199,6 +207,52 @@ func TestBuildTrafficQueryExcludeLocal(t *testing.T) {
 	}
 	if strings.Contains(without, "isIPAddressInRange") {
 		t.Fatalf("excludeLocal predicate leaked into the default query:\n%s", without)
+	}
+}
+
+// TestExcludeLocalDestinationSemantics evaluates the generated predicate with
+// a local ClickHouse binary when one is available: a local/private destination
+// such as 10.0.0.1 is hidden, while a private source to a public destination
+// is retained.
+func TestExcludeLocalDestinationSemantics(t *testing.T) {
+	path, err := exec.LookPath("clickhouse")
+	if err != nil {
+		t.Skip("clickhouse binary is not available")
+	}
+	where, err := trafficWhere(domain.TrafficQuery{ExcludeLocal: true}, true)
+	if err != nil {
+		t.Fatalf("trafficWhere: %v", err)
+	}
+	exclude := ""
+	for _, clause := range where.clauses {
+		if strings.HasPrefix(clause, "NOT ") && strings.Contains(clause, "isIPAddressInRange") {
+			exclude = clause
+		}
+	}
+	if exclude == "" {
+		t.Fatal("trafficWhere did not emit the excludeLocal predicate")
+	}
+	query := `
+SELECT
+	countIf(keep),
+	countIf(NOT keep),
+	countIf(keep AND src_ip = toIPv6('10.0.0.5') AND dst_ip = toIPv6('2.26.55.136'))
+FROM (
+	SELECT toIPv6('2.26.55.136') AS src_ip, toIPv6('10.0.0.1') AS dst_ip, ` + exclude + ` AS keep
+	UNION ALL
+	SELECT toIPv6('10.0.0.5') AS src_ip, toIPv6('2.26.55.136') AS dst_ip, ` + exclude + `
+	UNION ALL
+	SELECT toIPv6('10.0.0.5') AS src_ip, toIPv6('192.168.1.10') AS dst_ip, ` + exclude + `
+)
+FORMAT TSV`
+	out, err := exec.Command(path, "local", "--query", query).CombinedOutput()
+	if err != nil {
+		t.Fatalf("clickhouse local: %v\n%s", err, out)
+	}
+	// One retained private-to-public row, two hidden local-destination rows,
+	// and the retained row is exactly 10.0.0.5 -> 2.26.55.136.
+	if got, want := strings.TrimSpace(string(out)), "1\t2\t1"; got != want {
+		t.Fatalf("counts = %q, want %q", got, want)
 	}
 }
 
@@ -503,6 +557,12 @@ func TestTrafficSharedFiltersApplyToBothBranches(t *testing.T) {
 	if got := strings.Count(query, "(positionCaseInsensitive(block_events.domain, ?) > 0 OR positionCaseInsensitive(block_events.target, ?) > 0)"); got != 1 {
 		t.Fatalf("block domain filter appears %d times, want 1:\n%s", got, query)
 	}
+	if got := strings.Count(query, "NOT (isIPAddressInRange(dst_ip,"); got != 2 {
+		t.Fatalf("destination-only excludeLocal filter appears %d times, want once per branch:\n%s", got, query)
+	}
+	if strings.Contains(query, "isIPAddressInRange(src_ip") {
+		t.Fatalf("excludeLocal must not filter on the source address:\n%s", query)
+	}
 	if !strings.Contains(query, "FROM flows WHERE flows.blocked = 0 AND started_at >= ? AND started_at <= ?") {
 		t.Fatalf("flow branch is missing its date window:\n%s", query)
 	}
@@ -671,6 +731,12 @@ func TestTrafficCountQuerySharesFilters(t *testing.T) {
 	}
 	if !strings.Contains(count, "started_at >= ?") || !strings.Contains(count, "block_events.at >= ?") {
 		t.Fatalf("count query is missing the date window:\n%s", count)
+	}
+	if !strings.Contains(count, "NOT (isIPAddressInRange(dst_ip,") {
+		t.Fatalf("count query is missing the destination-only excludeLocal filter:\n%s", count)
+	}
+	if strings.Contains(count, "isIPAddressInRange(src_ip") {
+		t.Fatalf("count query must not filter excludeLocal on the source:\n%s", count)
 	}
 	if strings.Contains(count, "ORDER BY") || strings.Contains(count, "LIMIT") {
 		t.Fatalf("count query must not paginate:\n%s", count)

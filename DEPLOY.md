@@ -90,8 +90,13 @@ What the settings mean:
   `KURWALL_GRPC_BIND_ADDR=0.0.0.0` so agents can still reach `9090`.
 - Pin `KURWALL_COORDINATOR_IMAGE` to a release tag or digest instead of
   `latest` for reproducible upgrades.
-- If the default iptoasn download is slow, set
-  `KURWALL_ASN_CATALOG_URL=http://www.db.mirror.stargrave.org/ip/ip2asn-combined.tsv.gz`.
+- ASN data defaults to the official iptoasn combined feed
+  (`https://iptoasn.com/data/ip2asn-combined.tsv.gz`). The coordinator downloads
+  the whole feed within `catalog_timeout` (90s by default). If that download is
+  slow or blocked from the coordinator host, set `KURWALL_ASN_CATALOG_URL` to an
+  iptoasn-compatible mirror that you have verified is reachable there. The
+  catalog must complete one successful load before Events shows ASN and country
+  labels; catalog failures never block event ingestion.
 
 The `.env` contains database passwords. Never commit it.
 
@@ -248,8 +253,25 @@ docker volume ls | grep kurwall
 | Node cannot fetch the CA | `curl -fsS http://SERVER_IP:8080/agent/ca.crt`; the `init` service must have generated `kurwall-tls` |
 | Node stays offline | Port `9090` reachable, DNS resolves, node clock correct, certificate name matches `KURWALL_GRPC_SERVER_NAME` |
 | Dashboard login unavailable | Create an account with `kurwall users create-admin` |
-| ASN names not loading | Outbound HTTPS to RIPEstat/iptoasn, or configure `KURWALL_ASN_CATALOG_URL` |
+| ASN/country labels not loading | Search coordinator logs for `ASN catalog`; check outbound HTTPS to the official iptoasn feed or your configured mirror (see below) |
 | Coordinator unhealthy | `docker compose logs coordinator`, then `curl -fsS http://127.0.0.1:8080/api/v1/health` |
+
+### ASN catalog and Events labels
+
+```bash
+docker compose logs coordinator | grep -E 'ASN catalog|failed to look up ASN'
+```
+
+The catalog defaults to the official iptoasn combined feed. It must finish one
+successful load (`ASN catalog updated` with a nonzero `ranges`) before Events can
+show ASN and country labels; each request resolves labels from the stored
+`asn_ranges` table at read time. A download that ends with
+`ASN catalog refresh failed` or `read ASN catalog: context deadline exceeded`
+leaves labels empty until a later 5-minute retry succeeds. Catalog and per-request
+lookup failures are best-effort and never block event ingestion. If the official
+feed is unreachable or too slow, set `KURWALL_ASN_CATALOG_URL` to an
+iptoasn-compatible mirror that you have verified is downloadable from the
+coordinator host; do not rely on a mirror you have not tested from that host.
 
 To regenerate the CA and coordinator certificate (this invalidates all enrolled
 agents):

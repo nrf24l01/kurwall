@@ -235,6 +235,9 @@ Frames carry persisted events and node status changes. Live delivery is
 best-effort; ClickHouse remains the complete history. Overview shows the last
 live frames. Events refreshes through the query API, so ClickHouse applies the
 same node, condition and exclude-local filters to history and live results.
+The Events **Exclude local** chip hides events whose destination is a local,
+private, CGNAT, link-local or multicast address; private or container sources
+to public destinations remain visible.
 Connection records describe completed connections, not individual HTTP requests;
 they can appear later than an application's access log.
 With Live enabled the selected window rolls forward to now; pausing Live fixes
