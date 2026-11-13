@@ -1,0 +1,217 @@
+name: kurwall
+
+# Standalone server deployment. Copy this file and a .env from the repository,
+# then run `docker compose up -d`. No source checkout, host config files,
+# certificate scripts or agent-dist directory are needed.
+#
+#   curl -fsSL https://raw.githubusercontent.com/nrf24l01/kurwall/main/deploy/compose.standalone.yml -o compose.yml
+#   curl -fsSL https://raw.githubusercontent.com/nrf24l01/kurwall/main/deploy/standalone.env.example -o .env
+#   $EDITOR .env
+#   docker compose up -d
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kurwall}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-kurwall}
+    volumes:
+      - kurwall-postgres:/var/lib/postgresql
+    networks:
+      - kurwall-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.9-alpine
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-kurwall}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-kurwall}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?set CLICKHOUSE_PASSWORD in .env}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - kurwall-clickhouse:/var/lib/clickhouse
+    networks:
+      - kurwall-net
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "clickhouse-client --user \"$${CLICKHOUSE_USER}\" --password \"$${CLICKHOUSE_PASSWORD}\" --query 'SELECT 1' >/dev/null || exit 1",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
+  # Writes the coordinator YAML and generates the main CA + coordinator
+  # certificate on first start. Both are kept in named volumes.
+  init:
+    image: alpine:3.23
+    restart: "no"
+    volumes:
+      - kurwall-config:/config
+      - kurwall-tls:/tls
+    environment:
+      KURWALL_TLS_SAN: ${KURWALL_TLS_SAN:-DNS:kurwall-coordinator,DNS:localhost,IP:127.0.0.1}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        mkdir -p /config /tls
+        cat > /config/coordinator.yaml <<'EOF'
+        server:
+          http_addr: ":8080"
+          grpc_addr: ":9090"
+          web_static_dir: "/app/web"
+          public_url: ""
+          grpc_public_addr: ""
+          grpc_server_name: "kurwall-coordinator"
+          agent_dist_dir: "/app/agent-dist"
+          enrollment_dir: "/var/lib/kurwall/enrollment"
+          read_timeout: 30s
+          idle_timeout: 120s
+        postgres:
+          host: postgres
+          port: 5432
+          user: kurwall
+          password: ""
+          database: kurwall
+          sslmode: disable
+          max_conns: 10
+          connect_timeout: 5s
+          statement_timeout: 30s
+        clickhouse:
+          addr: clickhouse:9000
+          database: kurwall
+          username: kurwall
+          password: ""
+          dial_timeout: 5s
+          max_open_conns: 10
+          max_idle_conns: 5
+          insert_batch_size: 2000
+          insert_interval: 500ms
+          query_timeout: 15s
+        asn:
+          enabled: true
+          prefix_url_template: "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS{asn}"
+          holder_url_template: "https://stat.ripe.net/data/as-overview/data.json?resource=AS{asn}"
+          refresh_interval: 12h
+          retry_interval: 5m
+          request_timeout: 10s
+          max_prefixes: 20000
+          catalog_enabled: true
+          catalog_url: "https://iptoasn.com/data/ip2asn-combined.tsv.gz"
+          catalog_refresh_interval: 168h
+          catalog_retry_interval: 5m
+          catalog_timeout: 90s
+        tls:
+          enabled: true
+          ca_file: /etc/kurwall/tls/ca.crt
+          cert_file: /etc/kurwall/tls/coordinator.crt
+          key_file: /etc/kurwall/tls/coordinator.key
+          require_client_cert: true
+        agent:
+          tls_inspector_ports: [443]
+          dns_inspection: true
+          tls_inspection: true
+          batch_max_events: 500
+          flush_interval: 1s
+          offline_after: 90s
+        auth:
+          api_token: ""
+        ingest:
+          max_batch_events: 5000
+          dedup_retention: 168h
+          dedup_timeout: 2m
+        log:
+          level: info
+          format: json
+        EOF
+        chmod 755 /config /tls
+        chmod 644 /config/coordinator.yaml
+
+        if [ -s /tls/ca.crt ] && [ -s /tls/coordinator.crt ] && [ -s /tls/coordinator.key ]; then
+        echo "TLS files already present"
+        exit 0
+        fi
+
+        apk add --no-cache openssl >/dev/null
+        cd /tls
+        openssl genrsa -out ca.key 4096 >/dev/null 2>&1
+        openssl req -x509 -new -nodes -sha256 -days 3650 \
+        -key ca.key -subj "/CN=Kurwall Internal CA" -out ca.crt
+        openssl genrsa -out coordinator.key 2048 >/dev/null 2>&1
+        openssl req -new -key coordinator.key -subj "/CN=kurwall-coordinator" -out coordinator.csr
+        printf 'basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=%s\n' \
+        "$KURWALL_TLS_SAN" > coordinator.ext
+        openssl x509 -req -in coordinator.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+        -days 825 -sha256 -extfile coordinator.ext -out coordinator.crt
+        rm -f coordinator.csr coordinator.ext ca.srl
+        chmod 600 ca.key
+        chmod 644 ca.crt coordinator.crt coordinator.key
+        echo "generated CA and coordinator certificate"
+
+  coordinator:
+    image: ${KURWALL_COORDINATOR_IMAGE:-ghcr.io/nrf24l01/kurwall/coordinator:latest}
+    restart: unless-stopped
+    environment:
+      APP_CONFIG_PATH: /config/coordinator.yaml
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-kurwall}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-kurwall}
+      CLICKHOUSE_ADDR: clickhouse:9000
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-kurwall}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      KURWALL_API_TOKEN: ${KURWALL_API_TOKEN:-}
+      KURWALL_PUBLIC_URL: ${KURWALL_PUBLIC_URL:?set KURWALL_PUBLIC_URL in .env}
+      KURWALL_GRPC_PUBLIC_ADDR: ${KURWALL_GRPC_PUBLIC_ADDR:-}
+      KURWALL_GRPC_SERVER_NAME: ${KURWALL_GRPC_SERVER_NAME:-}
+      KURWALL_ASN_CATALOG_URL: ${KURWALL_ASN_CATALOG_URL:-}
+      KURWALL_ASN_PREFIX_URL: ${KURWALL_ASN_PREFIX_URL:-}
+      KURWALL_ASN_HOLDER_URL: ${KURWALL_ASN_HOLDER_URL:-}
+    volumes:
+      - kurwall-config:/config:ro
+      - kurwall-tls:/etc/kurwall/tls:ro
+      - kurwall-enrollment:/var/lib/kurwall
+    ports:
+      - "${KURWALL_HTTP_BIND_ADDR:-${KURWALL_BIND_ADDR:-0.0.0.0}}:8080:8080"
+      - "${KURWALL_GRPC_BIND_ADDR:-${KURWALL_BIND_ADDR:-0.0.0.0}}:9090:9090"
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    networks:
+      - kurwall-net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+networks:
+  kurwall-net:
+    driver: bridge
+
+volumes:
+  kurwall-postgres:
+  kurwall-clickhouse:
+  kurwall-config:
+  kurwall-tls:
+  kurwall-enrollment:

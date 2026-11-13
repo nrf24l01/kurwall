@@ -21,6 +21,48 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o /out/coordinator \
     ./cmd/coordinator
 
+# Build the node agent with the same version metadata. SQLite needs CGO, so the
+# result is a static musl binary that runs on any Linux node.
+FROM golang:1.27-alpine AS agent
+RUN apk add --no-cache build-base musl-dev
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
+ARG TARGETARCH=amd64
+RUN CGO_ENABLED=1 GOOS=linux GOARCH=${TARGETARCH} CC=gcc go build \
+    -tags "sqlite_omit_load_extension" \
+    -trimpath \
+    -ldflags="-s -w -linkmode external -extldflags '-static' -X github.com/kurwall/kurwall/internal/platform/version.Version=${VERSION} -X github.com/kurwall/kurwall/internal/platform/version.Commit=${COMMIT} -X github.com/kurwall/kurwall/internal/platform/version.BuildDate=${BUILD_DATE}" \
+    -o /out/kurwall-agent \
+    ./cmd/agent
+
+# Package the installer assets exactly like `make agent-dist` does. The CA is
+# not included: it is deployment-specific and served from the TLS directory.
+FROM alpine:3.23 AS agent-dist
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
+ARG TARGETARCH=amd64
+COPY --from=agent /out/kurwall-agent /tmp/kurwall-agent
+COPY deploy/systemd/kurwall-agent.service /tmp/
+COPY deploy/sysctl/99-kurwall.conf /tmp/
+RUN set -eu; \
+    bin="kurwall-agent-linux-${TARGETARCH}"; \
+    mkdir -p /out; \
+    cp /tmp/kurwall-agent "/out/${bin}"; \
+    cp /tmp/kurwall-agent.service /tmp/99-kurwall.conf /out/; \
+    printf '%s\n' "$VERSION" > /out/version.txt; \
+    cd /out; \
+    sha256sum "$bin" > checksums.txt; \
+    hash=$(sha256sum "$bin" | awk '{print $1}'); \
+    size=$(wc -c < "$bin" | tr -d ' '); \
+    printf '{\n  "version": "%s",\n  "commit": "%s",\n  "builtAt": "%s",\n  "binaries": {\n    "linux-%s": {"file": "%s", "sha256": "%s", "size": %s}\n  }\n}\n' \
+      "$VERSION" "$COMMIT" "$BUILD_DATE" "$TARGETARCH" "$bin" "$hash" "$size" > manifest.json
+
 FROM alpine:3.23
 
 RUN apk add --no-cache ca-certificates tzdata curl \
@@ -33,6 +75,7 @@ RUN ln -s /app/coordinator /usr/local/bin/kurwall \
     && mkdir -p /var/lib/kurwall \
     && chown kurwall:kurwall /var/lib/kurwall
 COPY --from=web /web/dist /app/web
+COPY --from=agent-dist /out /app/agent-dist
 
 USER kurwall
 EXPOSE 8080 9090

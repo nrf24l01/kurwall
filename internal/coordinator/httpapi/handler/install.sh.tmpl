@@ -119,7 +119,7 @@ echo "  platform:    linux-$ARCH"
 REMOTE_VERSION=$(curl -fsSL "$BASE_URL/agent/version.txt" 2>/dev/null | tr -d '[:space:]' || true)
 if [ -z "$REMOTE_VERSION" ]; then
   echo "agent distribution is not published at $BASE_URL/agent" >&2
-  echo "publish build/agent-dist and set KURWALL_AGENT_DIST_DIR on the coordinator" >&2
+  echo "use a current coordinator image or publish build/agent-dist and set server.agent_dist_dir" >&2
   exit 1
 fi
 

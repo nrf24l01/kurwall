@@ -58,7 +58,7 @@ applies to destinations reached over TCP DNS.
 
 ## Documentation
 
-- [Deployment guide](DEPLOY.md) — Docker Compose on a fresh server.
+- [Deployment guide](DEPLOY.md) — two files and Docker Compose, no repository clone.
 - [Configuration reference](docs/configuration.md) — every coordinator, agent,
   Compose and installer option.
 - [Dashboard console](#dashboard-console) — layout, filters and shortcuts.
@@ -103,9 +103,8 @@ host, the same files work with `podman compose` after
 
 ## Deployment
 
-See [DEPLOY.md](DEPLOY.md) for the complete server guide: Docker Compose,
-`.env`, certificates, the agent distribution, the first administrator, node
-enrollment, updates and backups.
+Copy `compose.yml` and `.env` from GitHub, then run `docker compose up -d`.
+See [DEPLOY.md](DEPLOY.md) for the complete server guide.
 
 ## Configuration
 
@@ -144,7 +143,7 @@ server:
   public_url: "https://kurwall.example.com"          # KURWALL_PUBLIC_URL
   grpc_public_addr: "grpc.kurwall.example.com:9090"  # KURWALL_GRPC_PUBLIC_ADDR
   grpc_server_name: "kurwall-coordinator"            # KURWALL_GRPC_SERVER_NAME
-  agent_dist_dir: "/app/agent-dist"                  # KURWALL_AGENT_DIST_DIR
+  agent_dist_dir: "/app/agent-dist"                  # baked into the image
   enrollment_dir: "/var/lib/kurwall/enrollment"      # KURWALL_ENROLLMENT_DIR
 ```
 

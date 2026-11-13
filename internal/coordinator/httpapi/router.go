@@ -38,6 +38,7 @@ type Deps struct {
 	GRPCServerName string
 	GRPCAddr       string
 	AgentDistDir   string
+	AgentCAFile    string
 	Logger         zerolog.Logger
 	DBHealth       func(ctx context.Context) error
 }
@@ -75,6 +76,7 @@ func New(d Deps) *echo.Echo {
 	h.GRPCServerName = d.GRPCServerName
 	h.GRPCAddr = d.GRPCAddr
 	h.AgentDistDir = d.AgentDistDir
+	h.AgentCAFile = d.AgentCAFile
 
 	e.GET("/ping", h.Ping)
 	e.GET("/api/v1/health", h.Health)

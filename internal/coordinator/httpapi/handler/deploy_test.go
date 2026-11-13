@@ -3,6 +3,8 @@ package handler
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -77,5 +79,25 @@ func TestInstallScriptDefaultsGRPCServerName(t *testing.T) {
 	})
 	if !strings.Contains(body, `server_name: "kurwall-coordinator"`) {
 		t.Fatal("install script did not default the gRPC server name")
+	}
+}
+
+func TestAgentAssetServesCAFromTLSFile(t *testing.T) {
+	dir := t.TempDir()
+	caFile := filepath.Join(dir, "ca.crt")
+	if err := os.WriteFile(caFile, []byte("test-ca"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := &Handler{AgentDistDir: dir, AgentCAFile: caFile}
+	req := httptest.NewRequest(http.MethodGet, "/agent/ca.crt", nil)
+	rec := httptest.NewRecorder()
+	c := echo.New().NewContext(req, rec)
+	c.SetParamNames("*")
+	c.SetParamValues("ca.crt")
+	if err := h.AgentAsset(c); err != nil {
+		t.Fatalf("AgentAsset: %v", err)
+	}
+	if got := rec.Body.String(); got != "test-ca" {
+		t.Fatalf("body = %q, want test-ca", got)
 	}
 }

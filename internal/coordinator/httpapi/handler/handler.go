@@ -36,6 +36,7 @@ type Handler struct {
 	GRPCServerName string
 	GRPCAddr       string
 	AgentDistDir   string
+	AgentCAFile    string
 }
 
 // New builds a handler set.

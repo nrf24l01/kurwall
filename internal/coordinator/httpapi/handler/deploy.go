@@ -170,6 +170,9 @@ func (h *Handler) AgentAsset(c echo.Context) error {
 		return echo.NotFoundHandler(c)
 	}
 	full := filepath.Join(h.AgentDistDir, name)
+	if name == "ca.crt" && h.AgentCAFile != "" {
+		full = h.AgentCAFile
+	}
 	info, err := os.Stat(full)
 	if err != nil || info.IsDir() {
 		return echo.NotFoundHandler(c)
