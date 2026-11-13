@@ -233,7 +233,15 @@ status. The browser requests a 30-second ticket from
 `POST /api/v1/stream-ticket`, then connects to `GET /api/v1/stream?ticket=…`.
 Frames carry persisted events and node status changes. Live delivery is
 best-effort; ClickHouse remains the complete history. Overview shows the last
-live frames and Events can prepend new matching rows while its Live chip is on.
+live frames. Events refreshes through the query API, so ClickHouse applies the
+same node, condition and exclude-local filters to history and live results.
+Connection records describe completed connections, not individual HTTP requests;
+they can appear later than an application's access log.
+With Live enabled the selected window rolls forward to now; pausing Live fixes
+the From/To range. Background queries run every five seconds while the page is
+visible, with WebSocket notifications requesting earlier refreshes. When reading
+older rows, a banner makes deferred updates explicit instead of moving the table
+under the reader.
 
 The Events → Traffic filter builder is persisted in the browser (`localStorage`)
 across reloads: the date-time window, node, condition rows, match mode,

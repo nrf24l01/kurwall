@@ -70,6 +70,10 @@ jobs:
         working-directory: web
         run: bun install --frozen-lockfile
 
+      - name: Web regression tests
+        working-directory: web
+        run: bun test tests/eventLive.test.ts
+
       - name: Type-check and build dashboard
         working-directory: web
         run: bun run build

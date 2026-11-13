@@ -50,11 +50,8 @@ func paginate(limit, offset int) (int, int) {
 	return limit, offset
 }
 
-// Flows returns consolidated connection history.
-func (s *Store) Flows(ctx context.Context, q domain.FlowQuery) ([]domain.FlowRecord, uint64, error) {
-	ctx, cancel := context.WithTimeout(ctx, s.timeout)
-	defer cancel()
-
+// flowsWhere builds the connection query filters.
+func flowsWhere(q domain.FlowQuery) (*where, error) {
 	w := &where{}
 	w.add("started_at >= ?", q.From)
 	w.add("started_at <= ?", q.To)
@@ -64,14 +61,14 @@ func (s *Store) Flows(ctx context.Context, q domain.FlowQuery) ([]domain.FlowRec
 	if q.SrcIP != "" {
 		ip, err := validIP(q.SrcIP)
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		w.add("src_ip = toIPv6(?)", ip)
 	}
 	if q.DstIP != "" {
 		ip, err := validIP(q.DstIP)
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		w.add("dst_ip = toIPv6(?)", ip)
 	}
@@ -89,6 +86,18 @@ func (s *Store) Flows(ctx context.Context, q domain.FlowQuery) ([]domain.FlowRec
 	}
 	if q.Protocol != nil {
 		w.add("protocol = ?", *q.Protocol)
+	}
+	return w, nil
+}
+
+// Flows returns consolidated connection history.
+func (s *Store) Flows(ctx context.Context, q domain.FlowQuery) ([]domain.FlowRecord, uint64, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+
+	w, err := flowsWhere(q)
+	if err != nil {
+		return nil, 0, err
 	}
 
 	var total uint64
@@ -127,11 +136,8 @@ func (s *Store) Flows(ctx context.Context, q domain.FlowQuery) ([]domain.FlowRec
 	return out, total, rows.Err()
 }
 
-// DNS returns DNS request history.
-func (s *Store) DNS(ctx context.Context, q domain.DNSQuery) ([]domain.DNSRecord, uint64, error) {
-	ctx, cancel := context.WithTimeout(ctx, s.timeout)
-	defer cancel()
-
+// dnsWhere builds the DNS query filters.
+func dnsWhere(q domain.DNSQuery) (*where, error) {
 	w := &where{}
 	w.add("at >= ?", q.From)
 	w.add("at <= ?", q.To)
@@ -141,7 +147,7 @@ func (s *Store) DNS(ctx context.Context, q domain.DNSQuery) ([]domain.DNSRecord,
 	if q.ClientIP != "" {
 		ip, err := validIP(q.ClientIP)
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		w.add("client_ip = toIPv6(?)", ip)
 	}
@@ -157,6 +163,18 @@ func (s *Store) DNS(ctx context.Context, q domain.DNSQuery) ([]domain.DNSRecord,
 		} else {
 			w.add("blocked = 0")
 		}
+	}
+	return w, nil
+}
+
+// DNS returns DNS request history.
+func (s *Store) DNS(ctx context.Context, q domain.DNSQuery) ([]domain.DNSRecord, uint64, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+
+	w, err := dnsWhere(q)
+	if err != nil {
+		return nil, 0, err
 	}
 
 	var total uint64
@@ -198,11 +216,8 @@ func (s *Store) DNS(ctx context.Context, q domain.DNSQuery) ([]domain.DNSRecord,
 	return out, total, rows.Err()
 }
 
-// Blocks returns blocking event history.
-func (s *Store) Blocks(ctx context.Context, q domain.BlockQuery) ([]domain.BlockRecord, uint64, error) {
-	ctx, cancel := context.WithTimeout(ctx, s.timeout)
-	defer cancel()
-
+// blocksWhere builds the blocking event query filters.
+func blocksWhere(q domain.BlockQuery) (*where, error) {
 	w := &where{}
 	w.add("at >= ?", q.From)
 	w.add("at <= ?", q.To)
@@ -224,16 +239,28 @@ func (s *Store) Blocks(ctx context.Context, q domain.BlockQuery) ([]domain.Block
 	if q.SrcIP != "" {
 		ip, err := validIP(q.SrcIP)
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		w.add("src_ip = toIPv6(?)", ip)
 	}
 	if q.DstIP != "" {
 		ip, err := validIP(q.DstIP)
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		w.add("dst_ip = toIPv6(?)", ip)
+	}
+	return w, nil
+}
+
+// Blocks returns blocking event history.
+func (s *Store) Blocks(ctx context.Context, q domain.BlockQuery) ([]domain.BlockRecord, uint64, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+
+	w, err := blocksWhere(q)
+	if err != nil {
+		return nil, 0, err
 	}
 
 	var total uint64
@@ -723,6 +750,25 @@ func buildTrafficQuery(q domain.TrafficQuery, includeFlows, includeBlocks bool) 
 	return query, args, nil
 }
 
+// buildTrafficCountQuery counts the same union the conditioned data query
+// reads, so totals and pages always use identical filters.
+func buildTrafficCountQuery(q domain.TrafficQuery, includeFlows, includeBlocks bool) (string, []any, error) {
+	union, args, err := buildTrafficUnion(q, includeFlows, includeBlocks)
+	if err != nil {
+		return "", nil, err
+	}
+	conditions, conditionArgs, err := trafficConditions(q)
+	if err != nil {
+		return "", nil, err
+	}
+	query := "SELECT count() FROM (" + union + ")"
+	if conditions != "" {
+		query += " WHERE " + conditions
+		args = append(args, conditionArgs...)
+	}
+	return query, args, nil
+}
+
 // Traffic returns allowed connections and blocking decisions in one feed.
 func (s *Store) Traffic(ctx context.Context, q domain.TrafficQuery) ([]domain.TrafficEvent, uint64, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
@@ -740,19 +786,9 @@ func (s *Store) Traffic(ctx context.Context, q domain.TrafficQuery) ([]domain.Tr
 
 	var total uint64
 	if len(q.Conditions) > 0 {
-		union, unionArgs, err := buildTrafficUnion(q, includeFlows, includeBlocks)
+		countQuery, countArgs, err := buildTrafficCountQuery(q, includeFlows, includeBlocks)
 		if err != nil {
 			return nil, 0, err
-		}
-		conditions, conditionArgs, err := trafficConditions(q)
-		if err != nil {
-			return nil, 0, err
-		}
-		countQuery := "SELECT count() FROM (" + union + ")"
-		countArgs := append([]any{}, unionArgs...)
-		if conditions != "" {
-			countQuery += " WHERE " + conditions
-			countArgs = append(countArgs, conditionArgs...)
 		}
 		if err := s.conn.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
 			return nil, 0, apperr.Internal("count traffic events", err)

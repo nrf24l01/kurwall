@@ -4,7 +4,22 @@ import ConsoleDialog from '@/components/console/ConsoleDialog.vue'
 import TrafficConditionBuilder from '@/components/events/TrafficConditionBuilder.vue'
 import PageHead from '@/components/console/PageHead.vue'
 import StatusMark from '@/components/console/StatusMark.vue'
-import { api, errorMessage, type BlockEvent, type DnsEvent, type Flow, type Node, type Page, type TrafficCondition, type TrafficEvent, type TrafficMatch } from '@/lib/api'
+import { api, errorMessage, type DnsEvent, type Node, type Page, type TrafficCondition, type TrafficEvent, type TrafficMatch } from '@/lib/api'
+import {
+  backgroundFetchLimit,
+  canApplyResponse,
+  commitActiveWindow,
+  DEFAULT_LIVE_WINDOW_MS,
+  isCurrentPageResponse,
+  isStaleResponse,
+  LIVE_SCROLL_DEFER_PX,
+  liveRefreshDecision,
+  MAX_EVENTS_LIMIT,
+  parseLocalDateTime,
+  resolveQueryWindow,
+  snapshotQueryWindow,
+  windowDurationMs,
+} from '@/lib/eventLive'
 import { liveBlocks, liveConnected, liveDns, liveFlows } from '@/lib/live'
 import { countryFlag, formatBytes, formatDuration, formatNumber, formatTime, protocolName } from '@/lib/utils'
 import { fieldDefinition } from '@/lib/trafficFilters'
@@ -22,9 +37,19 @@ const match = ref<TrafficMatch>('all')
 const conditions = ref<TrafficCondition[]>([])
 const excludeLocal = ref(false)
 const limit = 50
-const offset = ref(0)
 const loadingMore = ref(false)
 const live = ref(true)
+const liveDurationMs = ref(DEFAULT_LIVE_WINDOW_MS)
+const livePending = ref(false)
+const liveRefreshing = ref(false)
+
+const LIVE_REFRESH_MS = 5000
+const LIVE_DEBOUNCE_MS = 1000
+let disposed = false
+let requestSeq = 0
+let liveRefreshTimer: number | undefined
+let liveDebounceTimer: number | undefined
+let autoRefreshQueued = false
 
 function toLocalInput(date: Date): string {
   const pad = (value: number) => String(value).padStart(2, '0')
@@ -32,15 +57,20 @@ function toLocalInput(date: Date): string {
 }
 
 const now = new Date()
-const fromInput = ref(toLocalInput(new Date(now.getTime() - 3600 * 1000)))
+const fromInput = ref(toLocalInput(new Date(now.getTime() - DEFAULT_LIVE_WINDOW_MS)))
 const toInput = ref(toLocalInput(now))
 const activeFrom = ref('')
 const activeTo = ref('')
 
 function defaultWindow() {
   const to = new Date()
-  fromInput.value = toLocalInput(new Date(to.getTime() - 3600 * 1000))
+  fromInput.value = toLocalInput(new Date(to.getTime() - DEFAULT_LIVE_WINDOW_MS))
   toInput.value = toLocalInput(to)
+}
+
+/** Freeze the From→To width before a live window starts rolling. */
+function captureLiveDuration() {
+  liveDurationMs.value = windowDurationMs(parseLocalDateTime(fromInput.value), parseLocalDateTime(toInput.value))
 }
 
 const nodes = ref<Node[]>([])
@@ -78,17 +108,13 @@ const completeConditions = computed(() =>
 const conditionSignature = computed(() =>
   JSON.stringify({ match: match.value, conditions: completeConditions.value }),
 )
-const noFilters = computed(() => {
-  if (tab.value === 'traffic') {
-    return nodeId.value === 'all' && !excludeLocal.value && completeConditions.value.length === 0
+const loadedCount = computed(() => (tab.value === 'traffic' ? traffic.value?.items.length : dns.value?.items.length) ?? 0)
+const liveNotice = computed(() => {
+  if (!livePending.value) return ''
+  if (loadedCount.value > MAX_EVENTS_LIMIT) {
+    return `Live updates paused because ${loadedCount.value} rows are loaded; one refresh can preserve at most ${MAX_EVENTS_LIMIT}.`
   }
-  return (
-    nodeId.value === 'all' &&
-    !search.value.trim() &&
-    !container.value.trim() &&
-    !ip.value.trim() &&
-    filter.value === 'all'
-  )
+  return 'New events are available. Scroll to the top or refresh to load them.'
 })
 
 const filterOptions = [
@@ -172,6 +198,8 @@ function saveFilters() {
 }
 
 restoreFilters()
+// Restored live pages keep the stored From→To width but roll it up to now.
+if (live.value) captureLiveDuration()
 
 function qtypeName(value: number): string {
   const names: Record<number, string> = { 1: 'A', 2: 'NS', 5: 'CNAME', 6: 'SOA', 12: 'PTR', 15: 'MX', 16: 'TXT', 28: 'AAAA', 33: 'SRV', 64: 'SVCB', 65: 'HTTPS' }
@@ -217,66 +245,120 @@ function cancelConditions() {
 }
 
 function maybeLoadMore() {
-  if (loading.value || loadingMore.value || !hasMore.value) return
+  if (disposed || loading.value || loadingMore.value || liveRefreshing.value || !hasMore.value) return
   if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 400) {
     void loadMore()
   }
 }
 
-async function load() {
-  offset.value = 0
-  loading.value = true
+interface LoadOptions {
+  /** Keep existing rows on screen and fetch at least as many from the server. */
+  background?: boolean
+}
+
+async function load(options: LoadOptions = {}) {
+  if (disposed) return
+  const background = options.background === true
+  const seq = ++requestSeq
+  const resolved = resolveQueryWindow({
+    live: live.value,
+    fromInput: fromInput.value,
+    toInput: toInput.value,
+    durationMs: liveDurationMs.value,
+  })
+  if (!resolved.ok) {
+    error.value = resolved.error
+    loading.value = false
+    liveRefreshing.value = false
+    return
+  }
+
+  const range = resolved.window
+  // Build the request from a local snapshot; the active snapshot only moves
+  // forward with data that is actually accepted below.
+  const requested = snapshotQueryWindow(range)
   error.value = ''
-  const fromDate = fromInput.value ? new Date(fromInput.value) : null
-  const toDate = toInput.value ? new Date(toInput.value) : new Date()
-  if ((fromDate && Number.isNaN(fromDate.getTime())) || Number.isNaN(toDate.getTime())) {
-    error.value = 'From and To must be valid date/times.'
-    loading.value = false
-    return
-  }
-  if (fromDate && fromDate >= toDate) {
-    error.value = 'From must be before To.'
-    loading.value = false
-    return
-  }
-  activeFrom.value = fromDate ? fromDate.toISOString() : ''
-  activeTo.value = toDate.toISOString()
+  loading.value = !background
+  liveRefreshing.value = background
+
+  const requestedTab = tab.value
+  const loaded = requestedTab === 'traffic' ? traffic.value?.items.length ?? 0 : dns.value?.items.length ?? 0
+  const fetchLimit = background ? backgroundFetchLimit(loaded, limit) : limit
   const common = {
     nodeId: nodeId.value === 'all' ? undefined : nodeId.value,
-    limit,
-    offset: offset.value,
-    from: activeFrom.value || undefined,
-    to: activeTo.value,
+    limit: fetchLimit,
+    offset: 0,
+    from: requested.from || undefined,
+    to: requested.to,
   }
+  let nextTraffic: Page<TrafficEvent> | null = null
+  let nextDns: Page<DnsEvent> | null = null
+  let succeeded = false
   try {
-    if (tab.value === 'traffic') {
-      traffic.value = await api.traffic({
+    if (requestedTab === 'traffic') {
+      const result = await api.traffic({
         ...common,
         excludeLocal: excludeLocal.value || undefined,
         match: match.value,
         filter: completeConditions.value.length > 0 ? JSON.stringify(completeConditions.value) : undefined,
       })
+      if (!canApplyResponse(disposed, seq, requestSeq)) return
+      nextTraffic = result
     } else {
-      dns.value = await api.dns({
+      const result = await api.dns({
         ...common,
         container: container.value || undefined,
         domain: search.value || undefined,
         clientIp: ip.value || undefined,
         blocked: filter.value === 'all' ? undefined : filter.value === 'blocked',
       })
+      if (!canApplyResponse(disposed, seq, requestSeq)) return
+      nextDns = result
     }
+    succeeded = true
   } catch (err) {
+    if (!canApplyResponse(disposed, seq, requestSeq)) return
     error.value = errorMessage(err)
+    if (background) livePending.value = true
   } finally {
-    loading.value = false
-    void nextTick(() => maybeLoadMore())
+    if (!disposed && !isStaleResponse(seq, requestSeq)) {
+      loading.value = false
+      liveRefreshing.value = false
+      if (succeeded && background) livePending.value = false
+      if (autoRefreshQueued) scheduleLiveRefresh()
+      void nextTick(() => {
+        if (!disposed) maybeLoadMore()
+      })
+    }
+  }
+
+  const committed = commitActiveWindow(
+    { from: activeFrom.value, to: activeTo.value },
+    requested,
+    succeeded,
+  )
+  activeFrom.value = committed.from
+  activeTo.value = committed.to
+  if (succeeded) {
+    if (range.rolling) {
+      liveDurationMs.value = range.durationMs
+      if (range.from) fromInput.value = toLocalInput(range.from)
+      toInput.value = toLocalInput(range.to)
+    }
+    if (nextTraffic !== null) traffic.value = nextTraffic
+    if (nextDns !== null) dns.value = nextDns
   }
 }
 
 async function loadMore() {
-  if (loading.value || loadingMore.value) return
+  if (disposed || loading.value || loadingMore.value || liveRefreshing.value) return
   const active = page.value
   if (!active || active.items.length >= active.total) return
+  const requestedTab = tab.value
+  const seq = requestSeq
+  const expectedOffset = active.items.length
+  const expectedFrom = activeFrom.value
+  const expectedTo = activeTo.value
   loadingMore.value = true
   error.value = ''
   const common = {
@@ -286,141 +368,173 @@ async function loadMore() {
     to: activeTo.value,
   }
   try {
-    if (tab.value === 'traffic') {
+    if (requestedTab === 'traffic') {
       const current = traffic.value
       if (!current || current.items.length >= current.total) return
       const next = await api.traffic({
         ...common,
-        offset: current.items.length,
+        offset: expectedOffset,
         excludeLocal: excludeLocal.value || undefined,
         match: match.value,
         filter: completeConditions.value.length > 0 ? JSON.stringify(completeConditions.value) : undefined,
       })
-      const seen = new Set(current.items.map((item) => item.eventId))
-      const items = [...current.items, ...next.items.filter((item) => !seen.has(item.eventId))]
+      if (!sameLoadedPage(requestedTab, seq, expectedOffset, expectedFrom, expectedTo)) return
+      const latest = traffic.value
+      if (!latest) return
+      const seen = new Set(latest.items.map((item) => item.eventId))
+      const items = [...latest.items, ...next.items.filter((item) => !seen.has(item.eventId))]
       traffic.value = { ...next, items }
-      offset.value = items.length
     } else {
       const current = dns.value
       if (!current || current.items.length >= current.total) return
       const next = await api.dns({
         ...common,
         container: container.value || undefined,
-        offset: current.items.length,
+        offset: expectedOffset,
         domain: search.value || undefined,
         clientIp: ip.value || undefined,
         blocked: filter.value === 'all' ? undefined : filter.value === 'blocked',
       })
-      const seen = new Set(current.items.map((item) => item.eventId))
-      const items = [...current.items, ...next.items.filter((item) => !seen.has(item.eventId))]
+      if (!sameLoadedPage(requestedTab, seq, expectedOffset, expectedFrom, expectedTo)) return
+      const latest = dns.value
+      if (!latest) return
+      const seen = new Set(latest.items.map((item) => item.eventId))
+      const items = [...latest.items, ...next.items.filter((item) => !seen.has(item.eventId))]
       dns.value = { ...next, items }
-      offset.value = items.length
     }
   } catch (err) {
-    error.value = errorMessage(err)
+    if (canApplyResponse(disposed, seq, requestSeq)) error.value = errorMessage(err)
   } finally {
-    loadingMore.value = false
-    void nextTick(() => maybeLoadMore())
+    if (!disposed) {
+      loadingMore.value = false
+      if (!isStaleResponse(seq, requestSeq)) {
+        void nextTick(() => {
+          if (!disposed) maybeLoadMore()
+        })
+        if (autoRefreshQueued) scheduleLiveRefresh()
+      }
+    }
   }
 }
 
-function freshDns(items: DnsEvent[], previous: DnsEvent[] | undefined): DnsEvent[] {
-  const seen = new Set((previous ?? []).map((item) => item.eventId))
-  return items.filter((item) => !seen.has(item.eventId))
+/** Reject a page append if a newer load, tab change or window won the race. */
+function sameLoadedPage(tabAtStart: Tab, seq: number, offset: number, from: string, to: string): boolean {
+  return isCurrentPageResponse({
+    requestSeq: seq,
+    currentSeq: requestSeq,
+    requestedTab: tabAtStart,
+    currentTab: tab.value,
+    expectedFrom: from,
+    currentFrom: activeFrom.value,
+    expectedTo: to,
+    currentTo: activeTo.value,
+    expectedOffset: offset,
+    loaded: loadedCount.value,
+    disposed,
+  })
 }
 
-watch(liveDns, (items, previous) => {
-  if (!live.value || tab.value !== 'dns' || offset.value !== 0 || !noFilters.value || !dns.value) return
-  const incoming = freshDns(items, previous)
-  if (incoming.length === 0) return
-  const existing = new Set(dns.value.items.map((item) => item.eventId))
-  const add = incoming.filter((item) => !existing.has(item.eventId))
-  if (add.length === 0) return
-  dns.value = { ...dns.value, items: [...add, ...dns.value.items].slice(0, limit), total: dns.value.total + add.length }
+function runLiveRefresh() {
+  if (disposed) return
+  autoRefreshQueued = false
+  void load({ background: true })
+}
+
+/**
+ * Coalesce websocket batches. The trailing timer fires once per burst instead
+ * of restarting for every event, so a busy node cannot starve the refresh.
+ */
+function scheduleLiveRefresh() {
+  if (disposed || !live.value || liveDebounceTimer !== undefined) return
+  liveDebounceTimer = window.setTimeout(() => {
+    liveDebounceTimer = undefined
+    requestLiveRefresh()
+  }, LIVE_DEBOUNCE_MS)
+}
+
+function requestLiveRefresh(force = false) {
+  if (disposed) return
+  const decision = liveRefreshDecision({
+    live: live.value,
+    visible: document.visibilityState === 'visible',
+    loaded: loadedCount.value,
+    scrollY: window.scrollY,
+    force,
+  })
+  if (decision === 'skip') return
+  if (decision === 'defer') {
+    livePending.value = true
+    return
+  }
+  if (loading.value || loadingMore.value || liveRefreshing.value) {
+    autoRefreshQueued = true
+    return
+  }
+  runLiveRefresh()
+}
+
+function refreshLiveNow() {
+  if (disposed) return
+  livePending.value = false
+  autoRefreshQueued = false
+  if (loading.value || loadingMore.value || liveRefreshing.value) {
+    autoRefreshQueued = true
+    return
+  }
+  void load({ background: true })
+}
+
+function stopLiveTimers() {
+  if (liveRefreshTimer !== undefined) {
+    window.clearInterval(liveRefreshTimer)
+    liveRefreshTimer = undefined
+  }
+  if (liveDebounceTimer !== undefined) {
+    window.clearTimeout(liveDebounceTimer)
+    liveDebounceTimer = undefined
+  }
+}
+
+function startLiveTimers() {
+  if (disposed || !live.value || liveRefreshTimer !== undefined || document.visibilityState !== 'visible') return
+  liveRefreshTimer = window.setInterval(() => requestLiveRefresh(), LIVE_REFRESH_MS)
+}
+
+function onVisibilityChange() {
+  if (disposed || !live.value) return
+  if (document.visibilityState === 'visible') {
+    startLiveTimers()
+    requestLiveRefresh()
+  } else {
+    stopLiveTimers()
+  }
+}
+
+function onScroll() {
+  if (disposed) return
+  maybeLoadMore()
+  if (livePending.value && live.value && window.scrollY <= LIVE_SCROLL_DEFER_PX) {
+    requestLiveRefresh()
+  }
+}
+
+// Websocket traffic is only a notification now: every row comes back from the
+// event API with the active node, conditions and time window applied.
+watch(liveDns, () => {
+  if (!live.value || tab.value !== 'dns') return
+  scheduleLiveRefresh()
 })
 
-function flowToTraffic(flow: Flow): TrafficEvent {
-  return {
-    kind: 'connection',
-    eventId: flow.eventId,
-    nodeId: flow.nodeId,
-    at: flow.startedAt,
-    endedAt: flow.endedAt,
-    durationMs: flow.durationMs,
-    srcIp: flow.srcIp,
-    srcPort: flow.srcPort,
-    dstIp: flow.dstIp,
-    dstPort: flow.dstPort,
-    protocol: flow.protocol,
-    domain: flow.domain,
-    sni: flow.sni,
-    containerId: flow.containerId,
-    containerName: flow.containerName,
-    bytesIn: flow.bytesIn,
-    bytesOut: flow.bytesOut,
-    packetsIn: flow.packetsIn,
-    packetsOut: flow.packetsOut,
-    blocked: false,
-    ruleId: flow.ruleId,
-    reason: flow.reason,
-    network: flow.network,
-    dstAsn: flow.dstAsn,
-    dstAsnName: flow.dstAsnName,
-    dstCountry: flow.dstCountry,
-  }
-}
-
-function blockToTraffic(block: BlockEvent): TrafficEvent {
-  return {
-    kind: 'block',
-    eventId: block.eventId,
-    nodeId: block.nodeId,
-    at: block.at,
-    srcIp: block.srcIp,
-    srcPort: block.srcPort,
-    dstIp: block.dstIp,
-    dstPort: block.dstPort,
-    protocol: block.protocol,
-    domain: block.domain,
-    target: block.target,
-    blockKind: block.kind,
-    containerId: block.containerId,
-    containerName: block.containerName,
-    blocked: true,
-    ruleId: block.ruleId,
-    reason: block.reason,
-    dstAsn: block.dstAsn,
-    dstAsnName: block.dstAsnName,
-    dstCountry: block.dstCountry,
-  }
-}
-
-watch([liveFlows, liveBlocks], ([flows, blocks], [prevFlows, prevBlocks]) => {
-  const current = traffic.value
-  if (!live.value || tab.value !== 'traffic' || offset.value !== 0 || !noFilters.value || !current) return
-  // Diff against the previous buffer so rows that already fell off the capped
-  // table are never replayed; only genuinely new live events are prepended.
-  const seenFlows = new Set((prevFlows ?? []).map((flow) => flow.eventId))
-  const seenBlocks = new Set((prevBlocks ?? []).map((block) => block.eventId))
-  const rows = [
-    ...flows.filter((flow) => !flow.blocked && !seenFlows.has(flow.eventId)).map(flowToTraffic),
-    ...blocks.filter((block) => !seenBlocks.has(block.eventId)).map(blockToTraffic),
-  ].sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
-  const existing = new Set(current.items.map((item) => item.eventId))
-  const add: TrafficEvent[] = []
-  for (const row of rows) {
-    if (existing.has(row.eventId)) continue
-    existing.add(row.eventId)
-    add.push(row)
-  }
-  if (add.length === 0) return
-  traffic.value = { ...current, items: [...add, ...current.items].slice(0, limit), total: current.total + add.length }
+watch([liveFlows, liveBlocks], () => {
+  if (!live.value || tab.value !== 'traffic') return
+  scheduleLiveRefresh()
 })
 
 function applyFilters() {
   cancelSearch()
   cancelConditions()
-  offset.value = 0
+  if (live.value) captureLiveDuration()
+  livePending.value = false
   load()
 }
 
@@ -439,7 +553,8 @@ function resetFilters() {
   excludeLocal.value = false
   nodeId.value = 'all'
   defaultWindow()
-  offset.value = 0
+  if (live.value) captureLiveDuration()
+  livePending.value = false
   load()
 }
 
@@ -449,7 +564,7 @@ function changeTab(value: Tab) {
   cancelConditions()
   tab.value = value
   filter.value = 'all'
-  offset.value = 0
+  livePending.value = false
   load()
 }
 
@@ -515,7 +630,7 @@ function showDNS(event: DnsEvent) {
 }
 
 watch([nodeId, filter, excludeLocal], () => {
-  offset.value = 0
+  livePending.value = false
   load()
 })
 watch(conditionSignature, () => {
@@ -523,7 +638,7 @@ watch(conditionSignature, () => {
   cancelConditions()
   conditionTimer = window.setTimeout(() => {
     conditionTimer = undefined
-    offset.value = 0
+    livePending.value = false
     load()
   }, 300)
 })
@@ -536,14 +651,22 @@ watch(search, () => {
   cancelSearch()
   searchTimer = window.setTimeout(() => {
     searchTimer = undefined
-    offset.value = 0
+    livePending.value = false
     load()
   }, 300)
 })
-// Resuming live mode replays history so events missed while paused do not
-// leave a silent gap until the next manual refresh.
+// Enabling live captures the visible From→To width, then the API window rolls
+// to now. Pausing leaves the last rolling frame as a fixed range.
 watch(live, (on) => {
-  if (on) load()
+  livePending.value = false
+  if (on) {
+    captureLiveDuration()
+    startLiveTimers()
+    load()
+  } else {
+    stopLiveTimers()
+    autoRefreshQueued = false
+  }
 })
 watch(
   [fromInput, toInput, nodeId, match, conditions, excludeLocal, live, tab, search, container, ip, filter],
@@ -553,17 +676,32 @@ watch(
 useRefresh(load)
 onMounted(async () => {
   try {
-    nodes.value = (await api.nodes()).items
+    const result = await api.nodes()
+    if (disposed) return
+    nodes.value = result.items
   } catch {
+    if (disposed) return
     nodes.value = []
   }
-  window.addEventListener('scroll', maybeLoadMore, { passive: true })
+  if (disposed) return
+  window.addEventListener('scroll', onScroll, { passive: true })
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  startLiveTimers()
   load()
 })
 onBeforeUnmount(() => {
+  disposed = true
+  requestSeq++
+  autoRefreshQueued = false
+  livePending.value = false
+  liveRefreshing.value = false
+  loadingMore.value = false
+  loading.value = false
   cancelSearch()
   cancelConditions()
-  window.removeEventListener('scroll', maybeLoadMore)
+  stopLiveTimers()
+  window.removeEventListener('scroll', onScroll)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
 })
 </script>
 
@@ -571,7 +709,7 @@ onBeforeUnmount(() => {
   <div class="page">
     <PageHead title="Events" :subtitle="subtitle">
       <template #actions>
-        <button class="pc-btn pc-sm" type="button" :disabled="loading" @click="load">Refresh</button>
+        <button class="pc-btn pc-sm" type="button" :disabled="loading" @click="load()">Refresh</button>
       </template>
     </PageHead>
 
@@ -592,7 +730,7 @@ onBeforeUnmount(() => {
     <div v-if="error" class="band band-love">
       <div class="band-head">
         <StatusMark state="broken" word="request failed" />
-        <span class="band-actions"><button class="pc-btn pc-sm" type="button" @click="load">Retry</button></span>
+        <span class="band-actions"><button class="pc-btn pc-sm" type="button" @click="load()">Retry</button></span>
       </div>
       <p>{{ error }}</p>
     </div>
@@ -640,7 +778,7 @@ onBeforeUnmount(() => {
       </button>
       <button class="pc-chip" type="button" :aria-pressed="live" @click="live = !live">
         <StatusMark :state="liveConnected ? 'running' : 'broken'" />
-        {{ live ? 'Live' : 'Paused' }}
+        {{ live ? (liveRefreshing ? 'Live · updating' : 'Live') : 'Paused' }}
       </button>
     </form>
 
@@ -649,6 +787,18 @@ onBeforeUnmount(() => {
       v-model:conditions="conditions"
       v-model:match="match"
     />
+
+    <div v-if="livePending" class="band band-gold">
+      <div class="band-head">
+        <StatusMark state="running" word="live" />
+        <span>{{ liveNotice }}</span>
+        <span class="band-actions">
+          <button class="pc-btn pc-sm" type="button" :disabled="liveRefreshing" @click="refreshLiveNow">
+            {{ liveRefreshing ? 'Refreshing…' : 'Refresh now' }}
+          </button>
+        </span>
+      </div>
+    </div>
 
     <div class="areas">
       <section class="area">
@@ -748,14 +898,20 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="pager">
-          <span>{{ page ? `${formatNumber(page.items.length)} shown · ${formatNumber(page.total)} total` : '—' }}</span>
+          <span>
+            {{ page ? `${formatNumber(page.items.length)} shown · ${formatNumber(page.total)} total` : '—' }}
+            <template v-if="live"> · {{ liveRefreshing ? 'updating from server…' : 'server live' }}</template>
+          </span>
           <span class="pages">
             <button v-if="hasMore" class="pc-btn pc-sm" type="button" :disabled="loadingMore" @click="loadMore">
               {{ loadingMore ? 'Loading…' : 'Load more' }}
             </button>
           </span>
         </div>
-        <div class="foot">Scroll to load more. Click a row for every field. Filters search the selected window only.</div>
+        <div class="foot">
+          Scroll to load more. Click a row for every field. Filters search the selected window only.
+          <template v-if="live"> Live refreshes with every filter applied; loaded rows are kept while you scroll.</template>
+        </div>
       </section>
     </div>
 
