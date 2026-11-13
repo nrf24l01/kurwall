@@ -47,7 +47,7 @@ services:
       start_period: 20s
 
   coordinator:
-    image: ${KURWALL_COORDINATOR_IMAGE:-ghcr.io/kurwall/kurwall/coordinator:latest}
+    image: ${KURWALL_COORDINATOR_IMAGE:-ghcr.io/nrf24l01/kurwall/coordinator:latest}
     restart: unless-stopped
     environment:
       APP_CONFIG_PATH: /etc/kurwall/coordinator.yaml
@@ -70,8 +70,8 @@ services:
       - ${KURWALL_AGENT_DIST_DIR:-./agent-dist}:/app/agent-dist:ro
       - kurwall-enrollment:/var/lib/kurwall
     ports:
-      - "${KURWALL_BIND_ADDR:-127.0.0.1}:8080:8080"
-      - "${KURWALL_BIND_ADDR:-127.0.0.1}:9090:9090"
+      - "${KURWALL_HTTP_BIND_ADDR:-${KURWALL_BIND_ADDR:-127.0.0.1}}:8080:8080"
+      - "${KURWALL_GRPC_BIND_ADDR:-${KURWALL_BIND_ADDR:-0.0.0.0}}:9090:9090"
     depends_on:
       postgres:
         condition: service_healthy
