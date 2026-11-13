@@ -5,21 +5,19 @@ and Docker containers. A central coordinator distributes policies and stores
 events; a privileged node agent enforces filtering locally and keeps working
 when the coordinator is unavailable.
 
-```
-                    mTLS gRPC (events + policy snapshots)
-  ┌────────────┐  ────────────────────────────────────────►  ┌──────────────┐
-  │   Agent    │                                             │ Coordinator  │
-  │  (node)    │  ◄────────────────────────────────────────  │   (Go)       │
-  └─────┬──────┘                                             └──────┬───────┘
-        │ nftables / NFQUEUE / conntrack                            │
-        │                                                           ├── PostgreSQL
-  ┌─────▼──────┐                                              ┌─────▼──────┐
-  │ Linux host │                                              │ ClickHouse │
-  │ + Docker   │                                              └────────────┘
-  └────────────┘                                                     ▲
-                                                              ┌──────┴───────┐
-                                                              │ Vue dashboard │
-                                                              └──────────────┘
+```mermaid
+flowchart LR
+    subgraph nodegroup["Node"]
+        direction TB
+        agent["Agent"]
+        host["Linux host<br/>+ Docker"]
+        agent -->|"nftables / NFQUEUE / conntrack"| host
+    end
+
+    agent <-->|"mTLS gRPC<br/>events + policy snapshots"| coordinator["Coordinator (Go)"]
+    coordinator --> postgres[("PostgreSQL")]
+    coordinator --> clickhouse[("ClickHouse")]
+    dashboard["Vue dashboard"] -->|"HTTP + WebSocket"| coordinator
 ```
 
 ## Components
