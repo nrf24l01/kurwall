@@ -69,13 +69,11 @@ services:
       KURWALL_PUBLIC_URL: ${KURWALL_PUBLIC_URL:-http://localhost:8080}
       KURWALL_GRPC_PUBLIC_ADDR: ${KURWALL_GRPC_PUBLIC_ADDR:-}
       KURWALL_GRPC_SERVER_NAME: ${KURWALL_GRPC_SERVER_NAME:-}
-      KURWALL_AGENT_DIST_DIR: /app/agent-dist
       KURWALL_ENROLLMENT_DIR: /var/lib/kurwall/enrollment
       KURWALL_ASN_CATALOG_URL: ${KURWALL_ASN_CATALOG_URL:-}
     volumes:
       - ./coordinator.yaml:/etc/kurwall/coordinator.yaml:ro
       - ./tls:/etc/kurwall/tls:ro
-      - ../build/agent-dist:/app/agent-dist:ro
       - kurwall-enrollment:/var/lib/kurwall
     ports:
       - "${KURWALL_HTTP_BIND_ADDR:-${KURWALL_BIND_ADDR:-127.0.0.1}}:8080:8080"

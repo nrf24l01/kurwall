@@ -16,8 +16,8 @@ image already contains the node agent binary and installer assets.
 - Inbound `8080/tcp` for the dashboard/API and `9090/tcp` for agents.
 - Outbound HTTPS for the container registry and ASN data (or an ASN mirror).
 - A DNS name or IP address that both users and agents can reach.
-- The published GHCR image is `linux/amd64`. For arm64 nodes, build an arm64
-  image from the repository and set `KURWALL_COORDINATOR_IMAGE` to it.
+- The published GHCR image is `linux/amd64`. For arm64 nodes, use an arm64
+  build of the same image and set `KURWALL_COORDINATOR_IMAGE` to it.
 
 ## Ports
 
